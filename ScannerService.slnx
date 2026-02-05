@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path="installer.iss" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/ScannerService.Application/ScannerService.Application.csproj" />
+    <Project Path="src/ScannerService.Domain/ScannerService.Domain.csproj" />
+    <Project Path="src/ScannerService.Infrastructure/ScannerService.Infrastructure.csproj" />
+    <Project Path="src/ScannerService.TrayApp/ScannerService.TrayApp.csproj" />
+  </Folder>
+</Solution>

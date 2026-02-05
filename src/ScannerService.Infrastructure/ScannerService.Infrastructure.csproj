@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\ScannerService.Application\ScannerService.Application.csproj" />
+		<ProjectReference Include="..\ScannerService.Domain\ScannerService.Domain.csproj" />
+	</ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.23" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
+		<PackageReference Include="NAPS2.Images.Gdi" Version="1.2.1" />
+		<PackageReference Include="NAPS2.Images.ImageSharp" Version="1.2.1" />
+		<PackageReference Include="NAPS2.Sdk" Version="1.2.1" />
+		<PackageReference Include="NAPS2.Sdk.Worker.Win32" Version="1.2.1" />
+	</ItemGroup>
+</Project>
