@@ -274,8 +274,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 For issues and questions:
-- 🐛 [Report a bug](https://github.com/yourusername/scanner-service/issues)
-- 💡 [Request a feature](https://github.com/yourusername/scanner-service/issues)
+- 🐛 [Report a bug](https://github.com/AmirZag/scanner-service/issues)
+- 💡 [Request a feature](https://github.com/AmirZag/scanner-service/issues)
 - 📧 Email: arezaqassemi@gmail.com
 
 ---
