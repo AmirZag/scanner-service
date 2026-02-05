@@ -213,8 +213,8 @@ ScannerService/
 │   │   ├── Repositories/          # Data access layer
 │   │   └── Services/              # Scanner hardware integration
 │   └── ScannerService.TrayApp/
-│       ├── Configurations/        # API host service
-│       ├── WebApiHostService.cs   # Configuration models
+│       ├── Configurations/        # Configuration models
+│       ├── WebApiHostService.cs   # API host service
 │       └── TrayApp.cs             # System tray UI
 ├── installer.iss                  # Inno Setup script
 └── appsettings.json               # Configuration file
@@ -280,4 +280,4 @@ For issues and questions:
 
 ---
 
-** Made with ❤️ by Resaa **
+** Made with ❤️ by AmirZag **
