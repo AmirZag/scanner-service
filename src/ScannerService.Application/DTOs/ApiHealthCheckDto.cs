@@ -1,6 +1,6 @@
 ﻿namespace ScannerService.Application.DTOs;
 
-internal record ApiHealthCheckDto(
+public record ApiHealthCheckDto(
      bool IsRunning,
      string Version
 );

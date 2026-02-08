@@ -1,6 +1,6 @@
 ﻿namespace ScannerService.Application.DTOs;
 
-internal class ScanJobConfiguration
+public class ScanJobConfiguration
 {
     public string DeviceId { get; set; } = string.Empty;
     public string PaperSource { get; set; } = "Glass";

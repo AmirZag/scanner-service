@@ -5,7 +5,12 @@
 
 	<ItemGroup>
 		<PackageVersion Include="FluentValidation" Version="12.1.1" />
+		<PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.23" />
 		<PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
+		<PackageVersion Include="NAPS2.Images.Gdi" Version="1.2.1" />
+		<PackageVersion Include="NAPS2.Images.ImageSharp" Version="1.2.1" />
+		<PackageVersion Include="NAPS2.Sdk" Version="1.2.1" />
+		<PackageVersion Include="NAPS2.Sdk.Worker.Win32" Version="1.2.1" />
 		<PackageVersion Include="SonarAnalyzer.CSharp" Version="10.19.0.132793" />
 	</ItemGroup>
 </Project>

@@ -7,7 +7,7 @@ using ScannerService.Application.DTOs;
 
 namespace ScannerService.Application.Interfaces;
 
-internal interface IScannerQueries
+public interface IScannerQueries
 {
     Task<List<ScannerDto>> GetScannersListAsync();
 }

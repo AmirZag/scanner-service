@@ -1,6 +1,6 @@
 ﻿namespace ScannerService.Domain.Entities;
 
-internal class ExportSetting
+public class ExportSetting
 {
     public int Id { get; set; }
     public string Format { get; set; } = "PDF";

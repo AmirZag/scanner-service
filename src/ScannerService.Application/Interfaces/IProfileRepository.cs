@@ -7,11 +7,11 @@ using ScannerService.Application.DTOs;
 
 namespace ScannerService.Application.Interfaces;
 
-internal interface IProfileRepository
+public interface IProfileRepository
 {
     Task<List<ProfileDto>> GetAllAsync();
-    Task<ProfileDto?> GetByIdAsync();
-    Task<ProfileDto> AddAsync();
+    Task<ProfileDto?> GetByIdAsync(int id);
+    Task<ProfileDto> AddAsync(UpsertProfileDto upsertProfileDto);
     Task<ProfileDto?> UpdateAsync(int id, UpsertProfileDto upsertProfileDto);
     Task<bool> DeleteAsync(int id);
 }

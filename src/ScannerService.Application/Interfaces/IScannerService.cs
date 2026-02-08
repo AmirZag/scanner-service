@@ -7,7 +7,7 @@ using ScannerService.Application.DTOs;
 
 namespace ScannerService.Application.Interfaces;
 
-internal interface IScannerService
+public interface IScannerService
 {
     Task<List<string>> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration);
 }

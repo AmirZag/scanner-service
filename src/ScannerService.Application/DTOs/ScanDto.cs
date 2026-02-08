@@ -1,12 +1,12 @@
 ﻿namespace ScannerService.Application.DTOs;
 
-internal record ScanRequestDto(
+public record ScanRequestDto(
     int ProfileId,
     string? ExportPath = null,
     string? Format = null
 );
 
-internal record ScanResultDto(
+public record ScanResultDto(
     bool Success,
     List<string> Files,
     string? ErrorMessage,

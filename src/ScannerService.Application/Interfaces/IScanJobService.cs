@@ -2,7 +2,7 @@
 
 namespace ScannerService.Application.Interfaces;
 
-internal interface IScanJobService
+public interface IScanJobService
 {
-    Task<ScanResultDto> StartScanJobAsync();
+    Task<ScanResultDto> StartScanJobAsync(ScanRequestDto req);
 }

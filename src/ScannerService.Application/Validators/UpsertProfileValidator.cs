@@ -8,7 +8,7 @@ using ScannerService.Application.DTOs;
 
 namespace ScannerService.Application.Validators;
 
-internal class UpsertProfileValidator : AbstractValidator<UpsertProfileDto>
+public class UpsertProfileValidator : AbstractValidator<UpsertProfileDto>
 {
     public UpsertProfileValidator()
     {

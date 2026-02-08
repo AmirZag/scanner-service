@@ -1,6 +1,6 @@
 ﻿namespace ScannerService.Application.DTOs;
 
-internal record ProfileDto(
+public record ProfileDto(
     int Id,
     string Name,
     string? DeviceId,
@@ -17,7 +17,7 @@ internal record ProfileDto(
     DateTime UpdatedAt
 );
 
-internal record UpsertProfileDto(
+public record UpsertProfileDto(
     string Name,
     string? DeviceId = null,
     string PaperSource = "Glass",

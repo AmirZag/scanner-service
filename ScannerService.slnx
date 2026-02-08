@@ -7,5 +7,6 @@
   <Folder Name="/src/">
     <Project Path="src/ScannerService.Application/ScannerService.Application.csproj" Id="8364ca9d-bb4f-4d59-ae93-9899fe2cc130" />
     <Project Path="src/ScannerService.Domain/ScannerService.Domain.csproj" />
+    <Project Path="src/ScannerService.Infrastructure/ScannerService.Infrastructure.csproj" Id="605ebc68-bcfb-4335-84a8-96025aa2c97d" />
   </Folder>
 </Solution>

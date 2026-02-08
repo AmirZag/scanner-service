@@ -8,7 +8,7 @@ using ScannerService.Application.DTOs;
 
 namespace ScannerService.Application.Validators;
 
-internal class ScanRequestValidator : AbstractValidator<ScanRequestDto>
+public class ScanRequestValidator : AbstractValidator<ScanRequestDto>
 {
     public ScanRequestValidator()
     {

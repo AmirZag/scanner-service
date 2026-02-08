@@ -2,7 +2,7 @@
 
 namespace ScannerService.Application.Interfaces;
 
-internal interface IExportSettingRepository
+public interface IExportSettingRepository
 {
     Task<ExportSettingDto> GetExportSettingAsync();
     Task UpdateExportSettingAsync(ExportSettingDto exportSettingDto);

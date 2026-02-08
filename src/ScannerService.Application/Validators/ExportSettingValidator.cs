@@ -3,7 +3,7 @@ using ScannerService.Application.DTOs;
 
 namespace ScannerService.Application.Validators;
 
-internal class ExportSettingValidator : AbstractValidator<ExportSettingDto>
+public class ExportSettingValidator : AbstractValidator<ExportSettingDto>
 {
     public ExportSettingValidator()
     {

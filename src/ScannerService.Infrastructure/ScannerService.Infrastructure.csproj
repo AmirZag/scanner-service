@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<ItemGroup>
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+		<PackageReference Include="NAPS2.Images.Gdi" />
+		<PackageReference Include="NAPS2.Images.ImageSharp" />
+		<PackageReference Include="NAPS2.Sdk" />
+		<PackageReference Include="NAPS2.Sdk.Worker.Win32" />
+	</ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\ScannerService.Application\ScannerService.Application.csproj" />
+		<ProjectReference Include="..\ScannerService.Domain\ScannerService.Domain.csproj" />
+	</ItemGroup>
+
+</Project>
