@@ -374,10 +374,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 For issues and questions:
-- 🐛 [Report a bug](https://github.com/yourusername/scanner-service/issues)
-- 💡 [Request a feature](https://github.com/yourusername/scanner-service/issues)
+- 🐛 [Report a bug](https://github.com/Amirzag/scanner-service/issues)
+- 💡 [Request a feature](https://github.com/Amirzag/scanner-service/issues)
+- 📧 Email: reza.noei@chmail.ir
 - 📧 Email: arezaqassemi@gmail.com
 
 ---
 
-**Made with ❤️ by AmirZag**
+**Made with ❤️ by Reza Noei & Amirreza Ghasemi**
