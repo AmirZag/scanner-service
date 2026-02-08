@@ -3,6 +3,7 @@
     <File Path=".editorconfig" />
     <File Path="Directory.Build.props" />
     <File Path="Directory.Packages.props" />
+    <File Path="installer.iss" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/ScannerService.Application/ScannerService.Application.csproj" Id="8364ca9d-bb4f-4d59-ae93-9899fe2cc130" />
