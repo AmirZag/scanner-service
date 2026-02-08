@@ -8,7 +8,9 @@ public record ScanRequestDto(
 
 public record ScanResultDto(
     bool Success,
-    List<string> Files,
+    byte[]? FileContent,
+    string? FileName,
+    string? ContentType,
     string? ErrorMessage,
     TimeSpan Duration
 );

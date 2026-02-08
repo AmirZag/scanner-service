@@ -2,6 +2,7 @@
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Infrastructure.Persistence;
+using System.IO.Compression;
 
 namespace ScannerService.Infrastructure.Services;
 
@@ -27,13 +28,11 @@ public class ScanJobService : IScanJobService
     public async Task<ScanResultDto> StartScanJobAsync(ScanRequestDto req)
     {
         var startTime = DateTime.UtcNow;
-
         _logger.LogInformation("Scan request received for profile {ProfileId}", req.ProfileId);
 
         try
         {
             var profile = await _context.Profiles.FindAsync(req.ProfileId);
-
             if (profile is null)
             {
                 _logger.LogWarning("Profile {ProfileId} not found", req.ProfileId);
@@ -47,7 +46,6 @@ public class ScanJobService : IScanJobService
             }
 
             var exportSetting = await _exportSettingRepository.GetExportSettingAsync();
-
             var exportPath = req.ExportPath ?? exportSetting.ExportPath;
 
             if (string.IsNullOrWhiteSpace(exportPath))
@@ -72,22 +70,58 @@ public class ScanJobService : IScanJobService
             };
 
             _logger.LogInformation("Starting scan job profile '{ProfileName}'", profile.Name);
-
             var files = await _scannerService.ExecuteScanAsync(scanJobConfig);
 
+            byte[] fileContent;
+            string fileName;
+            string contentType;
+
+            if (files.Count == 1)
+            {
+                var filePath = files[0];
+                fileContent = await File.ReadAllBytesAsync(filePath);
+                fileName = Path.GetFileName(filePath);
+                contentType = GetContentType(filePath);
+            }
+            else
+            {
+                var zipPath = Path.Combine(Path.GetTempPath(), $"scan_{Guid.NewGuid()}.zip");
+                ZipFile.CreateFromDirectory(
+                    Path.GetDirectoryName(files[0])!,
+                    zipPath,
+                    CompressionLevel.Optimal,
+                    false);
+
+                fileContent = await File.ReadAllBytesAsync(zipPath);
+                File.Delete(zipPath);
+                fileName = $"scanned_documents_{DateTime.UtcNow:yyyyMMdd_HHmmss}.zip";
+                contentType = "application/zip";
+            }
+
             var duration = DateTime.UtcNow - startTime;
+            _logger.LogInformation("Scan completed successfully in {Duration}ms", duration.TotalMilliseconds);
 
-            _logger.LogInformation("Scan completed successfully in {Duration}ms. {Count} files created",
-                duration.TotalMicroseconds, files.Count);
-
-            return new ScanResultDto(true, files, null, duration);
+            return new ScanResultDto(true, fileContent, fileName, contentType, null, duration);
         }
         catch (Exception ex)
         {
             var duration = DateTime.UtcNow - startTime;
             _logger.LogError(ex, "Scan failed after {Duration}ms: {Message}", duration.TotalMilliseconds, ex.Message);
-            return new ScanResultDto(false, new List<string>(), ex.Message, duration);
+            return new ScanResultDto(false, null, null, null, ex.Message, duration);
         }
+    }
 
+    private static string GetContentType(string filePath)
+    {
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
+        return extension switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".tiff" or ".tif" => "image/tiff",
+            ".bmp" => "image/bmp",
+            _ => "application/octet-stream"
+        };
     }
 }
