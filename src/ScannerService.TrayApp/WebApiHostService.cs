@@ -24,7 +24,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ScannerService.TrayApp.Services;
+namespace ScannerService.TrayApp;
 
 public class WebApiHostService : IDisposable
 {

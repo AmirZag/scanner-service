@@ -1,7 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
 using ScannerService.TrayApp.Configurations;
 using ScannerService.TrayApp.Properties;
-using ScannerService.TrayApp.Services;
+using ScannerService.TrayApp;
 using Serilog;
 using Serilog.Events;
 using System;
