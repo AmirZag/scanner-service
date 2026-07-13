@@ -1,224 +1,243 @@
-﻿# Resaa Scanner Service
+# Resaa Scanner Service
 
-A professional, production-ready scanner service for Windows with a clean REST API and system tray interface. Built with .NET 8 and Clean Architecture principles.
+A .NET 8 Windows scanner service with Clean Architecture, providing a REST API for document scanning operations. This service runs as a system tray application and hosts a Web API for managing scanners, profiles, and scan operations.
+
+## Table of Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Getting Started](#getting-started)
+- [Development](#development)
+- [API Documentation](#api-documentation)
+- [Project Structure](#project-structure)
+- [Configuration](#configuration)
+- [Building for Production](#building-for-production)
+- [Creating Installer](#creating-installer)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
 
 ## Features
 
-- 🖨️ **Multi-Driver Support** - TWAIN, WIA, and ESCL (eSCL/AirPrint) scanner drivers
-- 🎯 **Multiple Profiles** - Save and manage different scan configurations
-- 📄 **Multiple Output Formats** - PDF, JPEG, PNG, TIFF, Multi-page TIFF
-- 🌐 **REST API** - Full-featured API with OpenAPI/Swagger documentation
-- 🔧 **System Tray App** - Lightweight tray application for easy management
-- ✅ **Input Validation** - FluentValidation for robust data validation
-- 📊 **Production Logging** - Serilog with configurable retention policies
-- 🏗️ **Clean Architecture** - Maintainable, testable, and scalable codebase
-- 🔐 **Auto-Elevation** - Automatically requests administrator privileges when needed
+- **Multi-Driver Scanner Support**: TWAIN, WIA, and ESCL (eScan) drivers
+- **RESTful API**: Clean ASP.NET Core Web API with OpenAPI/Swagger documentation
+- **Multiple Output Formats**: PDF, JPEG, PNG, TIFF, MultiPageTIFF, ZIP
+- **Profile Management**: Save and reuse scan configurations
+- **System Tray Application**: Runs in background with auto-startup capability
+- **Clean Architecture**: Domain-Driven Design with separated concerns
+- **SQLite Database**: Local data persistence for profiles and settings
+- **Rate Limiting**: Built-in API rate limiting (100 requests/minute)
+- **Interactive API Documentation**: Scalar UI at `/scalar` endpoint
 
 ## Architecture
 
+This project follows **Clean Architecture** principles with clear separation of concerns:
+
 ```
 ScannerService/
-├── ScannerService.Domain/          # Entities and core domain logic
-├── ScannerService.Application/     # Business logic, DTOs, interfaces, validators
-├── ScannerService.Infrastructure/  # Data access, scanner hardware integration
-└── ScannerService.TrayApp/        # Windows Forms tray application & API host
+├── src/
+│   ├── ScannerService.Domain/          # Core entities (Profile, ExportSetting)
+│   ├── ScannerService.Application/     # DTOs, interfaces, validators
+│   ├── ScannerService.Infrastructure/  # EF Core, repositories, scanner integration
+│   └── ScannerService.TrayApp/        # Windows Forms tray app + REST API host
 ```
+
+### Layer Responsibilities
+
+| Layer | Responsibility | Dependencies |
+|-------|---------------|---------------|
+| **Domain** | Pure entities with business logic | None |
+| **Application** | DTOs, interfaces, validators | Domain |
+| **Infrastructure** | Data access, external services, scanner SDK | Domain, Application |
+| **TrayApp** | User interface, API hosting, composition | All layers |
 
 ## Tech Stack
 
-- **.NET 8** - Latest LTS framework
-- **Entity Framework Core** - SQLite database
-- **NAPS2.Sdk** - Cross-platform scanning library
-- **FluentValidation** - Input validation
-- **Serilog** - Structured logging
-- **NSwag** - OpenAPI document generation
-- **Scalar** - Modern API documentation UI
-- **Windows Forms** - System tray interface
+### Backend
+- **.NET 8** - Latest .NET platform
+- **C# 12** - Language features (nullable reference types, implicit usings)
+- **ASP.NET Core** - Web API framework
+- **Entity Framework Core 8** - ORM for database access
+- **SQLite** - Embedded database
+
+### Scanner Integration
+- **NAPS2.Sdk 1.2.1** - Cross-platform scanning SDK
+- **NAPS2.Images.Gdi** - Windows image processing
+- **NAPS2.Sdk.Worker.Win32** - TWAIN worker process for Windows
+
+### API Documentation
+- **NSwag.AspNetCore 14.6.3** - OpenAPI specification generation
+- **Scalar.AspNetCore 1.2.52** - Modern API documentation UI
+
+### Validation & Logging
+- **FluentValidation 12.1.1** - Input validation
+- **Serilog 8.0.3** - Structured logging with file sink
+
+### Code Quality
+- **SonarAnalyzer.CSharp** - Static analysis
+- TreatWarningsAsErrors = true
+- AnalysisLevel = latest
 
 ## Prerequisites
 
-- Windows 10/11 (64-bit)
-- .NET 8 Runtime (included in installer for self-contained deployment)
-- Scanner device with TWAIN, WIA, or ESCL support
-- **Administrator privileges** (required for scanner access)
+### For Development
+- **.NET 8 SDK** - [Download here](https://dotnet.microsoft.com/download/dotnet/8.0)
+- **Visual Studio 2022** or **JetBrains Rider** (recommended)
+- Windows 10/11 x64 operating system
 
-## Installation
+### For Building Installer
+- **Inno Setup 6** - [Download here](https://jrsoftware.org/isdl.php)
+  - Must be run as Administrator when creating installer
 
-### End Users
+### For Running
+- Windows 10/11 x64
+- Scanner with TWAIN, WIA, or ESCL driver
+- (Optional) Administrator privileges for full scanner hardware access
 
-1. Download `ResaaScannerSetup.exe` from [Releases](https://github.com/yourusername/scanner-service/releases)
-2. **Run the installer as Administrator** (right-click → "Run as administrator")
-3. The installer will:
-   - Install the application to `Program Files\ResaaScanner`
-   - Create a start menu shortcut
-   - Add to Windows startup (optional)
-4. The service will launch automatically in the system tray
-5. **Note:** The application will automatically request administrator privileges on subsequent launches
+## Getting Started
 
-### Developers
+### 1. Clone the Repository
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/scanner-service.git
+git clone https://github.com/Amirzag/scanner-service.git
 cd scanner-service
+```
 
-# Restore dependencies
+### 2. Restore Dependencies
+
+```bash
 dotnet restore
+```
 
-# Build the solution
+### 3. Build the Solution
+
+```bash
 dotnet build
+```
 
-# Run the application (requires administrator privileges)
+### 4. Run the Application
+
+```bash
 cd src/ScannerService.TrayApp
 dotnet run
 ```
 
-## Configuration
+The application will:
+1. Start as a system tray application
+2. Automatically restart with Administrator privileges if needed
+3. Host the Web API on the configured port (default: 58472)
+4. Create `scanner.db` SQLite database on first run
 
-Edit `appsettings.json` to customize settings:
+### 5. Access the API
 
-```json
-{
-  "ScannerService": {
-    "ApiPort": 58472,
-    "StatusCheckInterval": 5000,
-    "HttpTimeout": 2000,
-    "StartupDelay": 2000
-  },
-  "DatabasePath": "scanner.db",
-  "Logging": {
-    "LogLevel": {
-      "Default": "Information",
-      "Microsoft.AspNetCore": "Warning",
-      "Microsoft.EntityFrameworkCore": "Warning"
-    },
-    "File": {
-      "Path": "logs/scanner-.log",
-      "RollingInterval": "Day",
-      "RetainedFileCountLimit": 7,
-      "FileSizeLimitBytes": 10485760,
-      "RollOnFileSizeLimit": true
-    }
-  }
-}
-```
+- **API Documentation**: http://localhost:58472/scalar
+- **OpenAPI Spec**: http://localhost:58472/openapi/openapi.json
+- **Health Check**: http://localhost:58472/api/health
 
-## API Usage
+## Development
 
-Once running, access the API at `http://localhost:58472`
-
-### Quick Start
+### Running in Debug Mode
 
 ```bash
-# Get all available scanners
+dotnet build -c Debug
+dotnet run --project src/ScannerService.TrayApp/ScannerService.TrayApp.csproj
+```
+
+### Running in Release Mode
+
+```bash
+dotnet build -c Release
+dotnet run --project src/ScannerService.TrayApp/ScannerService.TrayApp.csproj --configuration Release
+```
+
+### Code Style and Analysis
+
+The project enforces strict code quality:
+- All warnings are treated as errors
+- SonarAnalyzer.CSharp provides static analysis
+- Nullable reference types enabled
+- Implicit usings enabled
+
+### Running Tests
+
+```bash
+dotnet test
+```
+
+## API Documentation
+
+The service provides a RESTful API with the following endpoints:
+
+### Health
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | API health check |
+
+### Scanners
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/scanners` | Get list of available scanners |
+
+### Profiles
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/profiles` | Get all scan profiles |
+| GET | `/api/profiles/{id}` | Get profile by ID |
+| POST | `/api/profiles` | Create new profile |
+| PUT | `/api/profiles/{id}` | Update existing profile |
+| DELETE | `/api/profiles/{id}` | Delete profile |
+
+### Scan Operations
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/scan` | Execute a scan job |
+
+### Export Settings
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/export-settings` | Get export configuration |
+| PUT | `/api/export-settings` | Update export configuration |
+
+### Interactive Documentation
+
+Visit **`/scalar`** (e.g., `http://localhost:58472/scalar`) for interactive API documentation with:
+- Request/response examples
+- Schema definitions
+- Try-it-out functionality
+- Code samples in multiple languages
+
+### Example: Get Scanners
+
+```bash
 curl http://localhost:58472/api/scanners
+```
 
-# Create a scan profile
-curl -X POST http://localhost:58472/api/profiles \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Quick Scan",
-    "deviceId": "your-scanner-id",
-    "resolution": 300,
-    "bitDepth": "Color",
-    "paperSource": "Glass"
-  }'
+Response:
+```json
+[
+  {
+    "id": "TWAIN::{Scanner-Name}",
+    "name": "HP Scanner Pro",
+    "driver": "Twain"
+  }
+]
+```
 
-# Perform a scan
+### Example: Execute Scan
+
+```bash
 curl -X POST http://localhost:58472/api/scan \
   -H "Content-Type: application/json" \
   -d '{
-    "profileId": 1,
-    "format": "PDF"
-  }' --output scan.pdf
+    "deviceId": "TWAIN::{Scanner-Name}",
+    "format": "PDF",
+    "resolution": 300,
+    "bitDepth": "Color",
+    "paperSource": "Feeder"
+  }' \
+  --output scan.pdf
 ```
-
-### API Documentation
-
-Interactive API documentation available at:
-- **Scalar UI**: `http://localhost:58472/scalar/openapi`
-- **OpenAPI JSON**: `http://localhost:58472/openapi/openapi.json`
-
-You can also access the Scalar UI directly from the system tray menu.
-
-## API Endpoints
-
-### Health
-- `GET /api/health` - Health check
-
-### Scanners
-- `GET /api/scanners` - List all available scanners
-
-### Profiles
-- `GET /api/profiles` - Get all profiles
-- `GET /api/profiles/{id}` - Get profile by ID
-- `POST /api/profiles` - Create new profile
-- `PUT /api/profiles/{id}` - Update profile
-- `DELETE /api/profiles/{id}` - Delete profile
-
-### Scanning
-- `POST /api/scan` - Perform scan with profile
-
-### Export Settings
-- `GET /api/export-settings` - Get export configuration
-- `PUT /api/export-settings` - Update export configuration
-
-## Profile Configuration
-
-Profiles support the following settings:
-
-| Setting | Options | Default |
-|---------|---------|---------|
-| **PaperSource** | Glass, Feeder | Glass |
-| **BitDepth** | Color, Grayscale, BlackAndWhite | Color |
-| **PageSize** | A4, A5, Letter, Legal | A4 |
-| **HorizontalAlign** | Left, Center, Right | Center |
-| **Resolution** | 50-1200 DPI | 200 |
-| **Scale** | 1:1, 1:2, 1:4, 1:8 | 1:1 |
-| **Brightness** | -100 to 100 | 0 |
-| **Contrast** | -100 to 100 | 0 |
-| **ImageQuality** | 1-100 | 85 |
-
-## Output Formats
-
-- **PDF** - Single or multi-page PDF
-- **JPEG** - Individual JPEG files
-- **PNG** - Individual PNG files  
-- **TIFF** - Individual TIFF files
-- **MultiPageTIFF** - Single multi-page TIFF
-
-## Building from Source
-
-### Development Build
-```bash
-dotnet build -c Debug
-```
-
-### Production Build
-```bash
-dotnet publish src/ScannerService.TrayApp/ScannerService.TrayApp.csproj \
-  -c Release \
-  -r win-x64 \
-  --self-contained true \
-  /p:PublishSingleFile=true \
-  /p:PublishReadyToRun=true
-```
-
-### Create Installer
-
-**Requirements:**
-- [Inno Setup 6](https://jrsoftware.org/isdl.php)
-- **Run Inno Setup Compiler as Administrator**
-
-```bash
-# Right-click on Inno Setup Compiler → Run as administrator
-# Then compile the script
-iscc Installer.iss
-```
-
-**Important:** Inno Setup must be run as administrator to properly set up the application with required privileges.
-
-Output: `ResaaScannerSetup.exe`
 
 ## Project Structure
 
@@ -226,159 +245,271 @@ Output: `ResaaScannerSetup.exe`
 ScannerService/
 ├── src/
 │   ├── ScannerService.Domain/
-│   │   └── Entities/              # Core domain entities (Profile, ExportSetting)
+│   │   ├── Entities/
+│   │   │   ├── Profile.cs              # Scan profile entity
+│   │   │   └── ExportSetting.cs        # Export configuration entity
+│   │   └── ScannerService.Domain.csproj
+│   │
 │   ├── ScannerService.Application/
-│   │   ├── DTOs/                  # Data transfer objects
-│   │   ├── Interfaces/            # Service interfaces
-│   │   └── Validators/            # FluentValidation rules
+│   │   ├── DTOs/
+│   │   │   ├── ScannerDto.cs          # Scanner representation
+│   │   │   ├── ProfileDto.cs          # Profile data transfer objects
+│   │   │   ├── ExportSettingDto.cs     # Export settings DTO
+│   │   │   ├── UpsertProfileDto.cs     # Create/update profile request
+│   │   │   └── ScanRequestDto.cs       # Scan execution request
+│   │   ├── Interfaces/
+│   │   │   ├── IScannerQueries.cs     # Scanner query operations
+│   │   │   ├── IScannerService.cs     # Scanner operations
+│   │   │   ├── IProfileRepository.cs  # Profile data access
+│   │   │   ├── IExportSettingRepository.cs # Export settings data access
+│   │   │   └── IScanJobService.cs     # Scan job orchestration
+│   │   ├── Validators/
+│   │   │   ├── UpsertProfileValidator.cs
+│   │   │   ├── ScanRequestValidator.cs
+│   │   │   └── ExportSettingValidator.cs
+│   │   └── ScannerService.Application.csproj
+│   │
 │   ├── ScannerService.Infrastructure/
-│   │   ├── Persistence/           # EF Core DbContext
-│   │   ├── Repositories/          # Data access layer
-│   │   └── Services/              # Scanner hardware integration
+│   │   ├── Persistence/
+│   │   │   └── Context.cs             # EF Core DbContext
+│   │   ├── Repositories/
+│   │   │   ├── ProfileRepository.cs    # Profile data access implementation
+│   │   │   ├── ExportSettingRepository.cs # Export settings implementation
+│   │   │   └── RepositoryBase.cs       # Base repository with common operations
+│   │   ├── Services/
+│   │   │   ├── ScannerService.cs      # Scanner hardware integration (NAPS2)
+│   │   │   └── ScanJobService.cs      # Scan job orchestration service
+│   │   └── ScannerService.Infrastructure.csproj
+│   │
 │   └── ScannerService.TrayApp/
-│       ├── Configurations/        # Configuration models
-│       ├── WebApiHostService.cs   # API host service
-│       ├── TrayApp.cs             # System tray UI
-│       ├── Program.cs             # Entry point with auto-elevation
-│       └── Properties/
-│           ├── app.ico            # Application icon
-│           └── Resources.resx     # Localized resources
-├── Directory.Build.props          # Global project properties
-├── Directory.Packages.props       # Centralized package management
-├── Installer.iss                  # Inno Setup script
-└── appsettings.json              # Configuration file
+│       ├── Configurations/
+│       │   ├── ScannerServiceConfiguration.cs
+│       │   ├── LoggingConfiguration.cs
+│       │   └── ConfigurationValidator.cs
+│       ├── Middleware/
+│       │   └── RateLimitMiddleware.cs  # Rate limiting implementation
+│       ├── WebApiHostService.cs        # Web API hosting and lifecycle
+│       ├── TrayApplicationContext.cs   # Application entry point
+│       ├── Program.cs                  # Main program with auto-elevation
+│       ├── Properties/
+│       │   ├── Resources.resx         # Persian (Farsi) localization strings
+│       │   └── app.ico                 # Application icon
+│       ├── appsettings.json            # Configuration file
+│       └── ScannerService.TrayApp.csproj
+│
+├── Directory.Build.props              # Global MSBuild settings
+├── Directory.Packages.props           # Centralized package versions
+├── Installer.iss                      # Inno Setup installer script
+├── build-installer.bat                # Batch build script
+├── build-installer.ps1                # PowerShell build script
+└── README.md                          # This file
 ```
 
-## Centralized Package Management
+## Configuration
 
-This project uses **Central Package Management** (CPM) for consistent versioning across all projects:
+Configuration is managed through `appsettings.json`:
 
-- **Directory.Packages.props** - Defines all package versions centrally
-- **Directory.Build.props** - Global project settings and analyzers
-
-Benefits:
-- Single source of truth for package versions
-- Easier updates and maintenance
-- Consistent analyzer and code quality settings
-
-## Code Quality
-
-The project enforces strict code quality standards:
-
-- **TreatWarningsAsErrors** - All warnings treated as errors
-- **SonarAnalyzer.CSharp** - Advanced code analysis
-- **EnforceCodeStyleInBuild** - Enforces coding standards during build
-- **Analysis Level** - Latest C# analysis features
-
-## Logging
-
-Logs are stored in the `logs/` directory with the following behavior:
-
-- **Rolling**: Daily log files (`scanner-20260208.log`)
-- **Retention**: Configurable (default: 7 days)
-- **Size Limit**: Configurable per file (default: 10 MB)
-- **Format**: Timestamped with log level and source context
-
-Example log entry:
-```
-2026-02-08 14:30:42.156 +00:00 [INF] ScannerService.TrayApp.Services.WebApiHostService Scanner Service API started successfully on port 58472
-```
-
-## Troubleshooting
-
-### Administrator Privileges Required
-
-**Symptom:** Application doesn't detect scanners or can't access hardware
-
-**Solution:** 
-- The application automatically requests administrator privileges on launch
-- If manually running from Visual Studio or command line, ensure you run as administrator
-- For the installer: Right-click `Installer.iss` in Inno Setup Compiler and select "Run as administrator"
-
-### Port Already in Use
-
-**Symptom:** Error message about port 58472 already in use
-
-**Solution:** Change the port in `appsettings.json`:
 ```json
-"ScannerService": {
-  "ApiPort": 58473
+{
+  "ScannerService": {
+    "ApiPort": 58472,               // Web API port
+    "StatusCheckInterval": 5000,    // Tray app status check interval (ms)
+    "HttpTimeout": 2000,            // HTTP timeout (ms)
+    "StartupDelay": 2000            // Startup delay (ms)
+  },
+  "DatabasePath": "scanner.db",     // SQLite database filename
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "Microsoft.EntityFrameworkCore": "Warning"
+    },
+    "File": {
+      "Path": "logs/scanner-.log",              // Log file path pattern
+      "RollingInterval": "Day",                 // Roll interval: Minute/Hour/Day/Month/Year
+      "RetainedFileCountLimit": 7,             // Number of log files to retain
+      "FileSizeLimitBytes": 10485760,          // Max log file size (10MB)
+      "RollOnFileSizeLimit": true              // Create new file on size limit
+    }
+  }
 }
 ```
 
+### Configuration Classes
+
+- `ScannerServiceConfiguration` - Maps to `ScannerService` section
+- `LoggingConfiguration` - Maps to `Logging` section
+- `ConfigurationValidator` - Validates configuration on startup
+
+## Building for Production
+
+### Publish Self-Contained Executable
+
+```bash
+dotnet publish src/ScannerService.TrayApp/ScannerService.TrayApp.csproj \
+  -c Release \
+  -r win-x64 \
+  --self-contained true \
+  /p:PublishSingleFile=false \
+  /p:PublishReadyToRun=true \
+  --output "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64"
+```
+
+**Output**: All required files in the specified output directory including:
+- `ScannerService.TrayApp.exe` - Main executable
+- `*.dll` - Required assemblies
+- `NAPS2.Worker.exe` - TWAIN worker process (required for scanner support)
+- `appsettings.json` - Configuration file
+
+### Publish Settings Explanation
+
+| Setting | Purpose |
+|---------|---------|
+| `-c Release` | Release build configuration |
+| `-r win-x64` | Target Windows 64-bit |
+| `--self-contained true` | Include .NET runtime with app |
+| `/p:PublishSingleFile=false` | Keep files separate (required for NAPS2.Worker.exe) |
+| `/p:PublishReadyToRun=true` | Pre-compile to native code (faster startup) |
+
+## Creating Installer
+
+### Using PowerShell (Recommended)
+
+```powershell
+.\build-installer.ps1
+```
+
+### Using Batch
+
+```bash
+.\build-installer.bat
+```
+
+### Manual Installer Creation
+
+```bash
+# 1. Build and publish
+dotnet build -c Release
+dotnet publish src/ScannerService.TrayApp/ScannerService.TrayApp.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=false /p:PublishReadyToRun=true
+
+# 2. Run Inno Setup (must be Administrator)
+iscc Installer.iss
+```
+
+**Output**: `InstallerOutput\ResaaScannerSetup.exe`
+
+### Installer Features
+
+- **Maintenance Mode**: Detects existing installation and offers Repair/Modify/Uninstall
+- **User-Only Installation**: Installs to `%LOCALAPPDATA%` (no admin required)
+- **Auto-Startup**: Adds application to Windows startup
+- **Shortcuts**: Creates Start Menu and Desktop shortcuts
+- **Clean Uninstall**: Removes all files and registry entries
+
+## Troubleshooting
+
 ### Scanner Not Detected
 
-1. Ensure scanner drivers are installed
-2. Check Windows Device Manager for scanner visibility
-3. Verify the application is running with administrator privileges
-4. Try different drivers (WIA usually most reliable on Windows)
-5. Check logs in `logs/` directory for detailed error messages
+**Problem**: `/api/scanners` returns empty array
 
-### TWAIN Worker Failed
+**Possible Causes**:
+1. Scanner drivers not installed
+2. TWAIN worker process not available
+3. Insufficient permissions
 
-**Symptom:** Log message: "TWAIN worker setup failed"
+**Solutions**:
+1. Install scanner manufacturer drivers
+2. Ensure application runs as Administrator
+3. Check logs in `%LOCALAPPDATA%\ResaaScanner\logs\`
 
-**This is normal behavior:**
-- NAPS2 may fail to initialize TWAIN in some environments
-- The service automatically falls back to WIA driver
-- WIA provides excellent compatibility on Windows
-- This does not affect functionality
+### Port Already in Use
+
+**Problem**: Application fails to start with "Port already in use" error
+
+**Solutions**:
+1. Change `ApiPort` in `appsettings.json`
+2. Close other applications using the port
+3. The app will automatically find an alternative port
+
+### TWAIN Scanning Fails
+
+**Problem**: TWAIN driver shows errors in logs
+
+**Cause**: TWAIN requires special handling in 64-bit processes
+
+**Solution**: The application includes `NAPS2.Worker.exe` for TWAIN support. Ensure:
+- The installer included this file
+- The file is in the application directory
+- No antivirus is blocking the worker process
 
 ### Database Issues
 
-**Location:** `scanner.db` in application directory
+**Problem**: Errors related to `scanner.db`
 
-**Reset:** Delete `scanner.db` to recreate with default settings
+**Solutions**:
+1. Delete `scanner.db` and let the app recreate it
+2. Check write permissions in the installation directory
+3. Ensure no other process is locking the database
 
-### Build Errors
+### API Returns 200 with No Content
 
-Ensure you have:
-- .NET 8 SDK installed
-- All NuGet packages restored (`dotnet restore`)
-- Administrator privileges when building for deployment
+**Problem**: API returns success but no data
 
-## Localization
+**Cause**: Scanner hardware integration issue
 
-The application includes Persian (Farsi) localization:
-- UI elements localized via `Resources.resx`
-- Status messages in Persian for better UX in target market
-- Date/time formatting using invariant culture for consistency
+**Solutions**:
+1. Test scanner with manufacturer software first
+2. Ensure `NAPS2.Worker.exe` is present
+3. Run application as Administrator
+4. Check logs for specific scanner driver errors
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Ensure code passes all analyzers and builds without warnings
-4. Commit your changes (`git commit -m 'Add amazing feature'`)
-5. Push to the branch (`git push origin feature/amazing-feature`)
-6. Open a Pull Request
+We welcome contributions! Please follow these guidelines:
 
-**Code Standards:**
-- Follow existing code style and patterns
-- All warnings must be resolved (treated as errors)
-- Add appropriate logging
-- Update documentation as needed
+### Development Workflow
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Make your changes following the code style
+4. Build and test: `dotnet build && dotnet test`
+5. Commit with descriptive messages
+6. Push to your fork
+7. Submit a pull request
+
+### Code Style Guidelines
+
+- Follow C# naming conventions (PascalCase for public members)
+- Use nullable reference types appropriately
+- Write XML documentation comments for public APIs
+- Add FluentValidation rules for all input DTOs
+- Keep methods small and focused
+- Use dependency injection for services
+
+### Adding New Features
+
+1. **Domain**: Add entities to `ScannerService.Domain`
+2. **Application**: Add DTOs, interfaces, and validators
+3. **Infrastructure**: Implement repositories and services
+4. **TrayApp**: Add API endpoints and configure DI
+
+### Testing
+
+- Write unit tests for business logic
+- Test API endpoints with integration tests
+- Verify scanner operations with real hardware
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- [NAPS2](https://github.com/cyanfish/naps2) - Scanning SDK
-- [Serilog](https://serilog.net/) - Logging framework
-- [FluentValidation](https://fluentvalidation.net/) - Validation library
-- [Scalar](https://github.com/scalar/scalar) - Modern API documentation
-- [Inno Setup](https://jrsoftware.org/isinfo.php) - Windows installer
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Support
 
-For issues and questions:
-- 🐛 [Report a bug](https://github.com/Amirzag/scanner-service/issues)
-- 💡 [Request a feature](https://github.com/Amirzag/scanner-service/issues)
-- 📧 Email: reza.noei@chmail.ir
-- 📧 Email: arezaqassemi@gmail.com
+- **Issues**: [GitHub Issues](https://github.com/Amirzag/scanner-service/issues)
+- **Releases**: [GitHub Releases](https://github.com/Amirzag/scanner-service/releases)
 
----
+## Acknowledgments
 
-**Made with ❤️ by Reza Noei & Amirreza Ghasemi**
+- **NAPS2** - Cross-platform scanning SDK
+- **Inno Setup** - Installer creation tool
+- **Scalar** - Modern API documentation
