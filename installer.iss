@@ -1,10 +1,16 @@
 [Setup]
 AppName=Resaa Scanner Service
 AppVersion=1.0
+AppVerName=Resaa Scanner Service 1.0
 AppPublisher=Resaa Softwares
 AppPublisherURL=https://github.com/Amirzag/scanner-service
 AppSupportURL=https://github.com/Amirzag/scanner-service/issues
 AppUpdatesURL=https://github.com/Amirzag/scanner-service/releases
+AppId={{A1B2C3D4-E5F6-4A5B-8C7D-9E0F1A2B3C4D}
+VersionInfoVersion=1.0.0.0
+
+; Prevent multiple instances of the installer from running
+AppMutex=ResaaScannerInstallerMutex
 
 DefaultDirName={localappdata}\ResaaScanner
 DefaultGroupName=Resaa Softwares
@@ -20,7 +26,7 @@ UninstallDisplayIcon={app}\ScannerService.TrayApp.exe
 ; PrivilegesRequiredOverridesAllowed=commandline
 
 ; Specify this is an x64 installer
-ArchitecturesAllowed=x64
+ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64
 
 ; Close running instances before installation
@@ -29,13 +35,7 @@ CloseApplicationsFilter=ScannerService.TrayApp.exe
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "persian"; MessagesFile: "compiler:Languages\Persian.isl"
-
-[Messages]
-english.WelcomeLabel1=Welcome to the Resaa Scanner Service Setup Wizard
-english.WelcomeLabel2=This will install Resaa Scanner Service on your computer.
-english.FinishedLabel=Resaa Scanner Service has been installed successfully.
-english.FinishedLabel2=The application will start automatically when you log in.
+; Name: "persian"; MessagesFile: "compiler:Languages\Persian.isl"  ; Persian.isl not included in standard Inno Setup
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"
@@ -47,6 +47,9 @@ Source: "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64\S
 
 ; Required DLL files (excluding PDB debug symbols)
 Source: "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64\*.dll"; DestDir: "{app}"; Flags: ignoreversion; Excludes: "*.pdb"
+
+; NAPS2 Worker executable (required for TWAIN scanning)
+Source: "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64\NAPS2.Worker.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Configuration file
 Source: "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64\appsettings.json"; DestDir: "{app}"; Flags: ignoreversion
@@ -77,3 +80,26 @@ Type: files; Name: "{app}\scanner.db"
 [Registry]
 ; Add to Windows Startup
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ResaaScannerService"; ValueData: """{app}\ScannerService.TrayApp.exe"""; Flags: uninsdeletevalue
+
+[Code]
+function IsUpgrade(): Boolean;
+begin
+  Result := RegKeyExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-4A5B-8C7D-9E0F1A2B3C4D}_is1');
+end;
+
+function InitializeSetup(): Boolean;
+var
+  PreviousVersion: String;
+begin
+  Result := True;
+
+  if IsUpgrade() then
+  begin
+    if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-4A5B-8C7D-9E0F1A2B3C4D}_is1', 'DisplayVersion', PreviousVersion) then
+    begin
+      MsgBox('Resaa Scanner Service version ' + PreviousVersion + ' is already installed.' + #13#10 +
+             'You can choose to Repair, Modify, or Uninstall the application.',
+             mbInformation, MB_OK);
+    end;
+  end;
+end;
