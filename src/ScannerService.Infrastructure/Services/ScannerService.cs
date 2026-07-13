@@ -134,9 +134,11 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         await Task.CompletedTask;
     }
 
-    public async Task<List<string>> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration)
+    public async Task<ScanExecutionResult> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration)
     {
-        _logger.LogInformation("Starting scan operation with device {DeviceId}", scanJobConfiguration.DeviceId);
+        var scanStartTime = DateTime.UtcNow;
+        _logger.LogInformation("Starting scan operation - DeviceId: {DeviceId}, Format: {Format}, Resolution: {Resolution}",
+            scanJobConfiguration.DeviceId, scanJobConfiguration.Format, scanJobConfiguration.Resolution);
 
         await InitializeAsync();
 
@@ -144,8 +146,8 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 
         if (device == null)
         {
-            _logger.LogError("Scanner device not found: {DeviceId}", scanJobConfiguration.DeviceId);
-            throw new InvalidOperationException($"Scanner not found:{scanJobConfiguration.DeviceId}");
+            _logger.LogError("Scanner device not found - DeviceId: {DeviceId}", scanJobConfiguration.DeviceId);
+            return ScanExecutionResult.Fail($"Scanner not found: {scanJobConfiguration.DeviceId}");
         }
 
         var options = new NAPS2.Scan.ScanOptions
@@ -163,32 +165,60 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             : NAPS2.Scan.PaperSource.Flatbed
         };
 
-        _logger.LogDebug("Scan options: Resolution={Dpi}, BitDepth={BitDepth}, Source={Source}",
-            options.Dpi, scanJobConfiguration.BitDepth, scanJobConfiguration.PaperSource);
+        _logger.LogDebug("Scan options configured - Dpi: {Dpi}, BitDepth: {BitDepth}, PaperSource: {PaperSource}",
+            options.Dpi, scanJobConfiguration.BitDepth, options.PaperSource);
 
         var images = new List<ProcessedImage>();
 
-        await foreach (var image in _controller!.Scan(options))
+        try
         {
-            images.Add(image);
-            _logger.LogDebug("Captured image {Count}", images.Count);
+            await foreach (var image in _controller!.Scan(options))
+            {
+                images.Add(image);
+                _logger.LogDebug("Captured image {ImageNumber} at {Timestamp}", images.Count, DateTime.UtcNow);
+            }
         }
-        if (images.Count == 0)
+        catch (Exception ex)
         {
-            _logger.LogWarning("No images were scanned");
-            throw new InvalidOperationException("No images scanned");
+            var duration = DateTime.UtcNow - scanStartTime;
+            _logger.LogError(ex, "Error during scan operation - Duration: {DurationMs}ms", duration.TotalMilliseconds);
+            return ScanExecutionResult.Fail($"Scan operation failed: {ex.Message}");
         }
 
-        _logger.LogInformation("Scanned {Count} images, saving to {Format}", images.Count, scanJobConfiguration.Format);
-        var files = await SaveAsync(images, scanJobConfiguration);
+        if (images.Count == 0)
+        {
+            var duration = DateTime.UtcNow - scanStartTime;
+            _logger.LogWarning("No images were scanned - Duration: {DurationMs}ms", duration.TotalMilliseconds);
+            return ScanExecutionResult.Fail("No images were scanned. Please ensure the document is properly placed in the scanner and try again.");
+        }
+
+        _logger.LogInformation("Scanned {ImageCount} images, saving as {Format}", images.Count, scanJobConfiguration.Format);
+
+        List<string> files;
+        try
+        {
+            files = await SaveAsync(images, scanJobConfiguration);
+        }
+        catch (Exception ex)
+        {
+            var duration = DateTime.UtcNow - scanStartTime;
+            _logger.LogError(ex, "Failed to save scanned images - Duration: {DurationMs}ms", duration.TotalMilliseconds);
+            foreach (var img in images)
+            {
+                img.Dispose();
+            }
+            return ScanExecutionResult.Fail($"Failed to save scanned images: {ex.Message}");
+        }
 
         foreach (var img in images)
         {
             img.Dispose();
         }
 
-        _logger.LogInformation("Scan complete, saved {Count} files", files.Count);
-        return files;
+        var totalDuration = DateTime.UtcNow - scanStartTime;
+        _logger.LogInformation("Scan completed successfully - Images: {ImageCount}, Files: {FileCount}, Duration: {DurationMs}ms, OutputPath: {OutputPath}",
+            images.Count, files.Count, totalDuration.TotalMilliseconds, scanJobConfiguration.ExportPath);
+        return ScanExecutionResult.Succeed(files);
     }
 
     private async Task<List<string>> SaveAsync(List<ProcessedImage> images, ScanJobConfiguration scanJobConfiguration)

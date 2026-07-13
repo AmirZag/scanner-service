@@ -9,5 +9,5 @@ namespace ScannerService.Application.Interfaces;
 
 public interface IScannerService
 {
-    Task<List<string>> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration);
+    Task<ScanExecutionResult> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration);
 }

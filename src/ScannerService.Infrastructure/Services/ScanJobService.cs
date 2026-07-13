@@ -3,6 +3,7 @@ using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Infrastructure.Persistence;
 using System.IO.Compression;
+using System.Security;
 
 namespace ScannerService.Infrastructure.Services;
 
@@ -28,20 +29,22 @@ public class ScanJobService : IScanJobService
     public async Task<ScanResultDto> StartScanJobAsync(ScanRequestDto req)
     {
         var startTime = DateTime.UtcNow;
-        _logger.LogInformation("Scan request received for profile {ProfileId}", req.ProfileId);
+        _logger.LogInformation("Scan request received - ProfileId: {ProfileId}, Format: {Format}, ExportPath: {ExportPath}",
+            req.ProfileId, req.Format ?? "default", req.ExportPath ?? "default");
 
         try
         {
             var profile = await _context.Profiles.FindAsync(req.ProfileId);
             if (profile is null)
             {
-                _logger.LogWarning("Profile {ProfileId} not found", req.ProfileId);
+                _logger.LogWarning("Profile not found - ProfileId: {ProfileId}", req.ProfileId);
                 throw new InvalidOperationException($"Profile {req.ProfileId} not found");
             }
 
             if (string.IsNullOrEmpty(profile.DeviceId))
             {
-                _logger.LogWarning("Profile {ProfileId} has no device assigned", req.ProfileId);
+                _logger.LogWarning("Profile has no device assigned - ProfileId: {ProfileId}, ProfileName: {ProfileName}",
+                    req.ProfileId, profile.Name);
                 throw new InvalidOperationException("Profile does not have a scanner device assigned");
             }
 
@@ -51,8 +54,15 @@ public class ScanJobService : IScanJobService
             if (string.IsNullOrWhiteSpace(exportPath))
             {
                 exportPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Scans");
-                Directory.CreateDirectory(exportPath);
-                _logger.LogInformation("Using default output path: {Path}", exportPath);
+            }
+
+            // Validate and ensure export path is accessible
+            var validationResult = ValidateAndEnsureExportPath(exportPath);
+            if (!validationResult.IsValid)
+            {
+                var errorDuration = DateTime.UtcNow - startTime;
+                _logger.LogWarning("Export path validation failed: {ErrorMessage}", validationResult.ErrorMessage);
+                return new ScanResultDto(false, null, null, null, validationResult.ErrorMessage, errorDuration);
             }
 
             var scanJobConfig = new ScanJobConfiguration
@@ -70,7 +80,16 @@ public class ScanJobService : IScanJobService
             };
 
             _logger.LogInformation("Starting scan job profile '{ProfileName}'", profile.Name);
-            var files = await _scannerService.ExecuteScanAsync(scanJobConfig);
+            var scanResult = await _scannerService.ExecuteScanAsync(scanJobConfig);
+
+            if (!scanResult.Success)
+            {
+                var errorDuration = DateTime.UtcNow - startTime;
+                _logger.LogWarning("Scan operation failed: {ErrorMessage}", scanResult.ErrorMessage);
+                return new ScanResultDto(false, null, null, null, scanResult.ErrorMessage, errorDuration);
+            }
+
+            var files = scanResult.Files ?? throw new InvalidOperationException("Scan result has no files despite success");
 
             byte[] fileContent;
             string fileName;
@@ -99,15 +118,77 @@ public class ScanJobService : IScanJobService
             }
 
             var duration = DateTime.UtcNow - startTime;
-            _logger.LogInformation("Scan completed successfully in {Duration}ms", duration.TotalMilliseconds);
+            _logger.LogInformation("Scan completed successfully - ProfileId: {ProfileId}, ProfileName: {ProfileName}, Files: {FileCount}, Duration: {DurationMs}ms, OutputSize: {OutputSizeBytes}",
+                req.ProfileId, profile.Name, files.Count, duration.TotalMilliseconds, fileContent.Length);
 
             return new ScanResultDto(true, fileContent, fileName, contentType, null, duration);
         }
         catch (Exception ex)
         {
-            var duration = DateTime.UtcNow - startTime;
-            _logger.LogError(ex, "Scan failed after {Duration}ms: {Message}", duration.TotalMilliseconds, ex.Message);
-            return new ScanResultDto(false, null, null, null, ex.Message, duration);
+            var errorDuration = DateTime.UtcNow - startTime;
+            _logger.LogError(ex, "Scan failed after {Duration}ms: {Message}", errorDuration.TotalMilliseconds, ex.Message);
+            return new ScanResultDto(false, null, null, null, ex.Message, errorDuration);
+        }
+    }
+
+    private static (bool IsValid, string? ErrorMessage) ValidateAndEnsureExportPath(string exportPath)
+    {
+        try
+        {
+            // Check for invalid path characters
+            if (exportPath.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+            {
+                return (false, "Export path contains invalid characters");
+            }
+
+            // Ensure the path is absolute
+            if (!Path.IsPathRooted(exportPath))
+            {
+                return (false, "Export path must be an absolute path");
+            }
+
+            // Check if path exists or can be created
+            if (!Directory.Exists(exportPath))
+            {
+                try
+                {
+                    Directory.CreateDirectory(exportPath);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return (false, "Cannot create export directory - access denied. Please choose a different location or run as administrator");
+                }
+                catch (Exception ex)
+                {
+                    return (false, $"Cannot create export directory: {ex.Message}");
+                }
+            }
+
+            // Test write permissions by creating a temporary file
+            var testFile = Path.Combine(exportPath, $"~scan_test_{Guid.NewGuid()}.tmp");
+            try
+            {
+                File.WriteAllText(testFile, "test");
+                File.Delete(testFile);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return (false, "Cannot write to export directory - access denied. Please choose a different location or run as administrator");
+            }
+            catch (IOException ioEx)
+            {
+                return (false, $"Cannot write to export directory: {ioEx.Message}");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"Cannot access export directory: {ex.Message}");
+            }
+
+            return (true, null);
+        }
+        catch (ArgumentException ex)
+        {
+            return (false, $"Invalid export path: {ex.Message}");
         }
     }
 

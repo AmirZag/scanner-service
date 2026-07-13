@@ -1,4 +1,6 @@
 ﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 using ScannerService.TrayApp.Configurations;
 using ScannerService.TrayApp.Properties;
 using ScannerService.TrayApp;
@@ -21,7 +23,8 @@ public class TrayApp : ApplicationContext
 {
     private readonly NotifyIcon _icon;
     private readonly System.Windows.Forms.Timer _statusCheckTimer;
-    private readonly HttpClient _httpClient;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ServiceProvider _httpClientServiceProvider;
     private readonly SynchronizationContext _syncContext;
     private readonly WebApiHostService _webApiHost;
 
@@ -35,7 +38,7 @@ public class TrayApp : ApplicationContext
     private readonly object _stateLock = new object();
 
     private readonly ScannerServiceConfiguration _config;
-    private readonly string _apiHealthUrl;
+    private string _apiHealthUrl;
 
     private static readonly CompositeFormat StatusRunningFormat = CompositeFormat.Parse(Resources.StatusRunningPersianFormat);
     private static readonly CompositeFormat ApiUrlFormat = CompositeFormat.Parse("http://localhost:{0}/api/health");
@@ -60,14 +63,34 @@ public class TrayApp : ApplicationContext
         _config = configuration.GetSection("ScannerService")
             .Get<ScannerServiceConfiguration>() ?? new ScannerServiceConfiguration();
 
+        // Validate configuration
+        var validation = Configurations.ConfigurationValidator.ValidateScannerServiceConfiguration(_config);
+        if (!validation.IsValid)
+        {
+            var errorMessage = "Configuration validation failed:\n" + string.Join("\n", validation.Errors);
+            Log.Fatal("Configuration validation failed: {Errors}", string.Join("; ", validation.Errors));
+            MessageBox.Show(
+                errorMessage + "\n\nPlease correct appsettings.json and restart the application.",
+                "Configuration Error",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            System.Windows.Forms.Application.Exit();
+            throw new InvalidOperationException("Configuration validation failed: " + string.Join("; ", validation.Errors));
+        }
+
+        // Note: Actual port will be updated when WebApiHostService starts
         _apiHealthUrl = string.Format(CultureInfo.InvariantCulture, ApiUrlFormat, _config.ApiPort);
 
         _syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
-        _httpClient = new HttpClient
+        // Create HttpClientFactory for proper HttpClient lifecycle management
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddHttpClient("StatusCheck", client =>
         {
-            Timeout = TimeSpan.FromMilliseconds(_config.HttpTimeout)
-        };
+            client.Timeout = TimeSpan.FromMilliseconds(_config.HttpTimeout);
+        });
+        _httpClientServiceProvider = serviceCollection.BuildServiceProvider();
+        _httpClientFactory = _httpClientServiceProvider.GetService<IHttpClientFactory>()!;
 
         _webApiHost = new WebApiHostService(_config.ApiPort);
 
@@ -155,7 +178,7 @@ public class TrayApp : ApplicationContext
             }
 
             _webApiHost?.Dispose();
-            _httpClient?.Dispose();
+            _httpClientServiceProvider?.Dispose();
 
             if (_icon != null)
             {
@@ -231,7 +254,7 @@ public class TrayApp : ApplicationContext
 
         try
         {
-            var url = string.Format(CultureInfo.InvariantCulture, ScalarUrlFormat, _config.ApiPort);
+            var url = string.Format(CultureInfo.InvariantCulture, ScalarUrlFormat, _webApiHost.ActualPort);
             Process.Start(new ProcessStartInfo
             {
                 FileName = url,
@@ -371,8 +394,10 @@ public class TrayApp : ApplicationContext
 
                 await _webApiHost.StartAsync();
 
+                // Update the API health URL with the actual port used
                 _syncContext.Post(_ =>
                 {
+                    _apiHealthUrl = string.Format(CultureInfo.InvariantCulture, ApiUrlFormat, _webApiHost.ActualPort);
                     ShowNotification(Resources.ServiceStartedText, ToolTipIcon.Info);
                 }, null);
 
@@ -439,7 +464,8 @@ public class TrayApp : ApplicationContext
     {
         try
         {
-            var response = await _httpClient.GetAsync(_apiHealthUrl);
+            var httpClient = _httpClientFactory.CreateClient("StatusCheck");
+            var response = await httpClient.GetAsync(_apiHealthUrl);
             return response.IsSuccessStatusCode;
         }
         catch (TaskCanceledException)
@@ -480,7 +506,12 @@ public class TrayApp : ApplicationContext
             }
         }
 
-        return Icon.FromHandle(bmp.GetHicon());
+        // Get the icon handle and clone it to create a properly managed icon
+        // This prevents GDI handle leaks
+        var handle = bmp.GetHicon();
+        using var iconFromHandle = Icon.FromHandle(handle);
+        // Clone to create a completely independent icon
+        return (Icon)iconFromHandle.Clone();
     }
 
     private void ShowNotification(string message, ToolTipIcon icon)

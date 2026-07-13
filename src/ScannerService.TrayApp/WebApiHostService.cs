@@ -17,9 +17,12 @@ using ScannerService.TrayApp.Configurations;
 using Serilog;
 using Serilog.Events;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -31,7 +34,7 @@ public class WebApiHostService : IDisposable
     private WebApplication? _app;
     private CancellationTokenSource? _cts;
     private Task? _runTask;
-    private readonly int _port;
+    private readonly int _requestedPort;
     private bool _isDisposed;
 
     private static readonly CompositeFormat DataSourceFormat = CompositeFormat.Parse("Data Source={0}");
@@ -40,10 +43,12 @@ public class WebApiHostService : IDisposable
     private static readonly CompositeFormat WebApiStopErrorFormat = CompositeFormat.Parse("Error stopping Web API: {0}");
 
     public bool IsRunning { get; private set; }
+    public int ActualPort { get; private set; }
 
     public WebApiHostService(int port)
     {
-        _port = port;
+        _requestedPort = port;
+        ActualPort = port;
     }
 
     public async Task StartAsync()
@@ -65,6 +70,13 @@ public class WebApiHostService : IDisposable
 
             var loggingConfig = builder.Configuration.GetSection("Logging")
                 .Get<LoggingConfiguration>() ?? new LoggingConfiguration();
+
+            // Validate logging configuration
+            var logValidation = Configurations.ConfigurationValidator.ValidateLoggingConfiguration(loggingConfig);
+            if (!logValidation.IsValid)
+            {
+                throw new InvalidOperationException("Logging configuration validation failed: " + string.Join("; ", logValidation.Errors));
+            }
 
             var logPath = Path.Combine(AppContext.BaseDirectory, loggingConfig.File.Path);
             var logDirectory = Path.GetDirectoryName(logPath);
@@ -102,9 +114,19 @@ public class WebApiHostService : IDisposable
 
             builder.Host.UseSerilog();
 
+            // Try binding to requested port first, then alternatives
+            var availablePort = await FindAvailablePortAsync(_requestedPort);
+            if (availablePort != _requestedPort)
+            {
+                Log.Warning("Requested port {RequestedPort} is in use, using alternative port {AvailablePort}", _requestedPort, availablePort);
+            }
+            ActualPort = availablePort;
+
             builder.WebHost.ConfigureKestrel(options =>
             {
-                options.ListenLocalhost(_port);
+                options.ListenLocalhost(ActualPort);
+                // Limit max request body size to 100 MB
+                options.Limits.MaxRequestBodySize = 104857600; // 100 MB
             });
 
             var dbPath = Path.Combine(AppContext.BaseDirectory, "scanner.db");
@@ -119,6 +141,9 @@ public class WebApiHostService : IDisposable
             builder.Services.AddScoped<IScanJobService, ScanJobService>();
 
             builder.Services.AddValidatorsFromAssemblyContaining<UpsertProfileValidator>();
+
+            // Add HttpClient factory for proper HTTP client management
+            builder.Services.AddHttpClient();
 
             builder.Services.AddEndpointsApiExplorer();
 
@@ -136,6 +161,22 @@ public class WebApiHostService : IDisposable
                     p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
 
             _app = builder.Build();
+
+            // Configure request body size limits
+            _app.Use(async (context, next) =>
+            {
+                // For scan requests, we might receive larger payloads
+                if (context.Request.Path.StartsWithSegments("/api/scan"))
+                {
+                    context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>()!.MaxRequestBodySize = 104857600; // 100 MB
+                }
+                else
+                {
+                    // For other endpoints, limit to 1 MB
+                    context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>()!.MaxRequestBodySize = 1048576; // 1 MB
+                }
+                await next();
+            });
 
             using (var scope = _app.Services.CreateScope())
             {
@@ -157,6 +198,37 @@ public class WebApiHostService : IDisposable
                     .WithOpenApiRoutePattern("/openapi/{documentName}.json");
             });
 
+            _app.UseMiddleware<Middleware.RateLimitMiddleware>(new Middleware.RateLimitOptions
+            {
+                MaxRequests = 100, // 100 requests per minute
+                Window = TimeSpan.FromMinutes(1)
+            });
+
+            // Add request logging middleware
+            _app.Use(async (context, next) =>
+            {
+                var startTime = DateTime.UtcNow;
+                Log.Debug("API Request - Method: {Method}, Path: {Path}, RemoteIP: {RemoteIP}",
+                    context.Request.Method, context.Request.Path, context.Connection.RemoteIpAddress);
+
+                try
+                {
+                    await next();
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "API request failed - Method: {Method}, Path: {Path}, Status: {StatusCode}",
+                        context.Request.Method, context.Request.Path, context.Response.StatusCode);
+                    throw;
+                }
+                finally
+                {
+                    var duration = DateTime.UtcNow - startTime;
+                    Log.Information("API Request completed - Method: {Method}, Path: {Path}, Status: {StatusCode}, Duration: {DurationMs}ms",
+                        context.Request.Method, context.Request.Path, context.Response.StatusCode, duration.TotalMilliseconds);
+                }
+            });
+
             _app.UseCors();
 
             ConfigureEndpoints(_app);
@@ -164,23 +236,23 @@ public class WebApiHostService : IDisposable
             _runTask = _app.RunAsync(_cts.Token);
             IsRunning = true;
 
-            Log.Information("Scanner Service API started successfully on port {Port}", _port);
-            Debug.WriteLine(string.Format(CultureInfo.InvariantCulture, WebApiStartedFormat, _port));
+            Log.Information("Scanner Service API started successfully on port {ActualPort} (requested: {RequestedPort})", ActualPort, _requestedPort);
+            Debug.WriteLine(string.Format(CultureInfo.InvariantCulture, WebApiStartedFormat, ActualPort));
         }
         catch (IOException ex) when (ex.InnerException is Microsoft.AspNetCore.Connections.AddressInUseException)
         {
             Log.Error(ex,
                 "Port {Port} is already in use. Please close any other instances of the application or change the port in appsettings.json",
-                _port);
+                ActualPort);
 
             throw new InvalidOperationException(
                 string.Format(CultureInfo.InvariantCulture,
-                    "Port {0} is already in use. Please close other instances or change the port.", _port),
+                    "Port {0} is already in use. Please close other instances or change the port.", ActualPort),
                 ex);
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Failed to start Web API on port {Port}", _port);
+            Log.Error(ex, "Failed to start Web API on port {ActualPort}", ActualPort);
             Debug.WriteLine(string.Format(CultureInfo.InvariantCulture, WebApiFailedFormat, ex.Message));
             await StopAsync();
             throw;
@@ -365,5 +437,45 @@ public class WebApiHostService : IDisposable
         StopAsync().GetAwaiter().GetResult();
         Log.CloseAndFlush();
         GC.SuppressFinalize(this);
+    }
+
+    private static async Task<int> FindAvailablePortAsync(int startPort)
+    {
+        // Try the requested port first
+        if (await IsPortAvailableAsync(startPort))
+        {
+            return startPort;
+        }
+
+        // Try ports in the range (startPort to startPort + 100)
+        for (int port = startPort + 1; port <= startPort + 100; port++)
+        {
+            if (await IsPortAvailableAsync(port))
+            {
+                return port;
+            }
+        }
+
+        // If no port found in that range, try any available port
+        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var availablePort = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return availablePort;
+    }
+
+    private static async Task<bool> IsPortAvailableAsync(int port)
+    {
+        try
+        {
+            using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            listener.Stop();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
