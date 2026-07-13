@@ -10,17 +10,14 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        if (!IsRunAsAdministrator())
-        {
-            RestartAsAdministrator();
-            return;
-        }
+        // Check if running as admin
+        bool isAdmin = IsRunAsAdministrator();
 
         System.Windows.Forms.Application.SetHighDpiMode(HighDpiMode.SystemAware);
         System.Windows.Forms.Application.EnableVisualStyles();
         System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
 
-        using var trayApp = new TrayApp();
+        using var trayApp = new TrayApp(isAdmin);
         System.Windows.Forms.Application.Run(trayApp);
     }
 
@@ -38,7 +35,8 @@ internal static class Program
         }
     }
 
-    private static void RestartAsAdministrator()
+    // Optional: Method to restart as admin if user chooses
+    public static bool RestartAsAdministrator()
     {
         try
         {
@@ -50,14 +48,16 @@ internal static class Program
             };
 
             Process.Start(processInfo);
+            return true;
         }
         catch (Exception ex)
         {
             MessageBox.Show(
-                $"This application requires administrator privileges to run.\n\nError: {ex.Message}",
-                "Administrator Required",
+                $"Could not restart as administrator: {ex.Message}",
+                "Elevation Failed",
                 MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+                MessageBoxIcon.Warning);
+            return false;
         }
     }
 }

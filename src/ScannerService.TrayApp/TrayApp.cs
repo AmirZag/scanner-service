@@ -36,6 +36,7 @@ public class TrayApp : ApplicationContext
     private bool _isDisposed;
     private bool _isActuallyRunning;
     private readonly object _stateLock = new object();
+    private readonly bool _isAdmin;
 
     private readonly ScannerServiceConfiguration _config;
     private string _apiHealthUrl;
@@ -51,9 +52,12 @@ public class TrayApp : ApplicationContext
     private static readonly CompositeFormat HealthCheckFailedFormat = CompositeFormat.Parse(Resources.HealthCheckFailedFormat);
     private static readonly CompositeFormat NotificationFailedFormat = CompositeFormat.Parse(Resources.NotificationFailedFormat);
 
-    public TrayApp()
+    public TrayApp(bool isAdmin)
     {
+        _isAdmin = isAdmin;
+
         InitializeEarlyLogging();
+        Log.Information("Scanner Service Tray Application starting - Running with Admin: {IsAdmin}", isAdmin);
 
         var configuration = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
@@ -230,6 +234,16 @@ public class TrayApp : ApplicationContext
         };
         menu.Items.Add(_apiDocsMenuItem);
         menu.Items.Add(new ToolStripSeparator());
+
+        // Add "Restart as Admin" option if not already running as admin
+        if (!_isAdmin)
+        {
+            menu.Items.Add(new ToolStripMenuItem("Restart as Administrator", null, OnRestartAsAdmin)
+            {
+                Name = "restartAdmin"
+            });
+            menu.Items.Add(new ToolStripSeparator());
+        }
 
         menu.Items.Add(new ToolStripMenuItem(Resources.ExitMenuItemText, null, OnExit));
 
@@ -542,6 +556,32 @@ public class TrayApp : ApplicationContext
             StopService();
             Dispose();
             System.Windows.Forms.Application.Exit();
+        }
+    }
+
+    private void OnRestartAsAdmin(object? sender, EventArgs e)
+    {
+        var result = MessageBox.Show(
+            "This will restart the application with administrator privileges.\n\n" +
+            "Admin privileges may be required for:\n" +
+            "• Better scanner hardware access\n" +
+            "• Access to some scanner drivers (TWAIN)\n\n" +
+            "Continue?",
+            "Restart as Administrator",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (result == DialogResult.Yes)
+        {
+            StopService();
+            Dispose();
+
+            if (Program.RestartAsAdministrator())
+            {
+                // Successfully restarted as admin, exit current instance
+                System.Windows.Forms.Application.Exit();
+            }
+            // If restart failed, the user is still in the app
         }
     }
 }
