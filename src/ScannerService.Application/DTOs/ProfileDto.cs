@@ -30,3 +30,22 @@ public record UpsertProfileDto(
     int Contrast = 0,
     int ImageQuality = 85
 );
+
+/// <summary>
+/// DTO for partial profile updates. Only provided fields are updated.
+/// Null values mean "don't change this field" - they are NOT used to clear fields.
+/// To fully replace a profile, use the POST/PUT endpoint with UpsertProfileDto.
+/// </summary>
+public record UpdateProfileDto(
+    string? Name = null,
+    string? DeviceId = null,
+    string? PaperSource = null,
+    string? BitDepth = null,
+    int? Resolution = null,
+    string? PageSize = null,
+    string? HorizontalAlign = null,
+    string? Scale = null,
+    int? Brightness = null,
+    int? Contrast = null,
+    int? ImageQuality = null
+);

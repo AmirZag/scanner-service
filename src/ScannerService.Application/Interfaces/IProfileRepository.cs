@@ -12,6 +12,6 @@ public interface IProfileRepository
     Task<List<ProfileDto>> GetAllAsync();
     Task<ProfileDto?> GetByIdAsync(int id);
     Task<ProfileDto> AddAsync(UpsertProfileDto upsertProfileDto);
-    Task<ProfileDto?> UpdateAsync(int id, UpsertProfileDto upsertProfileDto);
+    Task<ProfileDto?> UpdateAsync(int id, UpdateProfileDto updateProfileDto);
     Task<bool> DeleteAsync(int id);
 }

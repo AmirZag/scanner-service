@@ -93,7 +93,7 @@ ScannerService/
 ### For Running
 - Windows 10/11 x64
 - Scanner with TWAIN, WIA, or ESCL driver
-- (Optional) Administrator privileges for full scanner hardware access
+- (Optional) Administrator privileges - only needed for some TWAIN-only scanners. Most modern scanners (WIA/ESCL) work without admin. If needed, use "اجرا با دسترسی ادمین" (Run as Admin) in the tray menu.
 
 ## Getting Started
 

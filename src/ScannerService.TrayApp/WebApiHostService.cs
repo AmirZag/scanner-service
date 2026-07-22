@@ -347,7 +347,8 @@ public class WebApiHostService : IDisposable
         .ProducesValidationProblem()
         .Accepts<UpsertProfileDto>("application/json");
 
-        app.MapPut("/api/profiles/{id}", async (int id, UpsertProfileDto req, IProfileRepository svc, IValidator<UpsertProfileDto> validator) =>
+        // Partial update endpoint: only provided fields are updated, null fields are unchanged
+        app.MapPatch("/api/profiles/{id}", async (int id, UpdateProfileDto req, IProfileRepository svc, IValidator<UpdateProfileDto> validator) =>
         {
             var validationResult = await validator.ValidateAsync(req);
             if (!validationResult.IsValid)
@@ -363,7 +364,7 @@ public class WebApiHostService : IDisposable
         .Produces(StatusCodes.Status200OK)
         .Produces(StatusCodes.Status404NotFound)
         .ProducesValidationProblem()
-        .Accepts<UpsertProfileDto>("application/json");
+        .Accepts<UpdateProfileDto>("application/json");
 
         app.MapDelete("/api/profiles/{id}", async (int id, IProfileRepository svc) =>
         {

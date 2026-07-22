@@ -59,9 +59,10 @@ public class ProfileRepository : IProfileRepository
         _logger.LogInformation("Profile added with ID {ProfileId}", entity.Id);
         return ToDto(entity);
     }
-    public async Task<ProfileDto?> UpdateAsync(int id, UpsertProfileDto upsertProfileDto)
+
+    public async Task<ProfileDto?> UpdateAsync(int id, UpdateProfileDto updateProfileDto)
     {
-        _logger.LogInformation("Updating Profile {ProfileId}", id);
+        _logger.LogInformation("Updating Profile {ProfileId} with partial update", id);
 
         var entity = await _context.Profiles.FindAsync(id);
         if (entity is null)
@@ -70,22 +71,84 @@ public class ProfileRepository : IProfileRepository
             return null;
         }
 
-        entity.Name = upsertProfileDto.Name;
-        entity.DeviceId = upsertProfileDto.DeviceId;
-        entity.PaperSource = upsertProfileDto.PaperSource;
-        entity.BitDepth = upsertProfileDto.BitDepth;
-        entity.PageSize = upsertProfileDto.PageSize;
-        entity.HorizontalAlign = upsertProfileDto.HorizontalAlign;
-        entity.Resolution = upsertProfileDto.Resolution;
-        entity.Scale = upsertProfileDto.Scale;
-        entity.Brightness = upsertProfileDto.Brightness;
-        entity.Contrast = upsertProfileDto.Contrast;
-        entity.ImageQuality = upsertProfileDto.ImageQuality;
-        entity.UpdatedAt = DateTime.UtcNow;
+        var hasChanges = false;
 
-        await _context.SaveChangesAsync();
+        if (updateProfileDto.Name != null)
+        {
+            entity.Name = updateProfileDto.Name;
+            hasChanges = true;
+        }
 
-        _logger.LogInformation("Profile {ProfileId} updated successfully", id);
+        if (updateProfileDto.DeviceId != null)
+        {
+            entity.DeviceId = updateProfileDto.DeviceId;
+            hasChanges = true;
+        }
+
+        if (updateProfileDto.PaperSource != null)
+        {
+            entity.PaperSource = updateProfileDto.PaperSource;
+            hasChanges = true;
+        }
+
+        if (updateProfileDto.BitDepth != null)
+        {
+            entity.BitDepth = updateProfileDto.BitDepth;
+            hasChanges = true;
+        }
+
+        if (updateProfileDto.PageSize != null)
+        {
+            entity.PageSize = updateProfileDto.PageSize;
+            hasChanges = true;
+        }
+
+        if (updateProfileDto.HorizontalAlign != null)
+        {
+            entity.HorizontalAlign = updateProfileDto.HorizontalAlign;
+            hasChanges = true;
+        }
+
+        if (updateProfileDto.Resolution != null)
+        {
+            entity.Resolution = updateProfileDto.Resolution.Value;
+            hasChanges = true;
+        }
+
+        if (updateProfileDto.Scale != null)
+        {
+            entity.Scale = updateProfileDto.Scale;
+            hasChanges = true;
+        }
+
+        if (updateProfileDto.Brightness != null)
+        {
+            entity.Brightness = updateProfileDto.Brightness.Value;
+            hasChanges = true;
+        }
+
+        if (updateProfileDto.Contrast != null)
+        {
+            entity.Contrast = updateProfileDto.Contrast.Value;
+            hasChanges = true;
+        }
+
+        if (updateProfileDto.ImageQuality != null)
+        {
+            entity.ImageQuality = updateProfileDto.ImageQuality.Value;
+            hasChanges = true;
+        }
+
+        if (hasChanges)
+        {
+            entity.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("Profile {ProfileId} updated successfully", id);
+        }
+        else
+        {
+            _logger.LogInformation("Profile {ProfileId} update requested but no changes to apply", id);
+        }
 
         return ToDto(entity);
     }

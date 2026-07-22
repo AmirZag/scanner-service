@@ -238,7 +238,7 @@ public class TrayApp : ApplicationContext
         // Add "Restart as Admin" option if not already running as admin
         if (!_isAdmin)
         {
-            menu.Items.Add(new ToolStripMenuItem("Restart as Administrator", null, OnRestartAsAdmin)
+            menu.Items.Add(new ToolStripMenuItem("اجرا با دسترسی ادمین", null, OnRestartAsAdmin)
             {
                 Name = "restartAdmin"
             });
