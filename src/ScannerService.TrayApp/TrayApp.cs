@@ -352,7 +352,7 @@ public class TrayApp : ApplicationContext
             if (_statusItem != null)
             {
                 _statusItem.Text = running
-                    ? string.Format(CultureInfo.CurrentCulture, StatusRunningFormat, _config.ApiPort)
+                    ? string.Format(CultureInfo.CurrentCulture, StatusRunningFormat, _webApiHost.ActualPort)
                     : Resources.StatusInactivePersian;
                 _statusItem.ForeColor = running ? Color.Green : Color.Red;
             }
