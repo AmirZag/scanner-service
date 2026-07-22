@@ -158,7 +158,10 @@ public class WebApiHostService : IDisposable
 
             builder.Services.AddCors(options =>
                 options.AddDefaultPolicy(p =>
-                    p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
+                    p.SetIsOriginAllowed(OriginChecker.IsLocalOrigin)
+                        .AllowAnyMethod()
+                        .AllowAnyHeader()
+                        .AllowCredentials()));
 
             _app = builder.Build();
 
@@ -476,6 +479,66 @@ public class WebApiHostService : IDisposable
         }
         catch
         {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Helper class to validate CORS origins for local network access.
+    /// Allows localhost, 127.0.0.1, and private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x).
+    /// </summary>
+    private static class OriginChecker
+    {
+        public static bool IsLocalOrigin(string? origin)
+        {
+            if (string.IsNullOrEmpty(origin))
+            {
+                return false;
+            }
+
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+            {
+                return false;
+            }
+
+            var host = uri.Host.ToLowerInvariant();
+
+            // Allow localhost variants
+            if (host == "localhost" || host == "127.0.0.1")
+            {
+                return true;
+            }
+
+            // Allow any 127.x.x.x (loopback range)
+            if (host.StartsWith("127.", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // Parse IP address and check if private
+            if (IPAddress.TryParse(host, out var ipAddress))
+            {
+                var bytes = ipAddress.GetAddressBytes();
+
+                // 10.0.0.0 - 10.255.255.255 (Class A private)
+                if (bytes[0] == 10)
+                {
+                    return true;
+                }
+
+                // 172.16.0.0 - 172.31.255.255 (Class B private)
+                if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+                {
+                    return true;
+                }
+
+                // 192.168.0.0 - 192.168.255.255 (Class C private)
+                if (bytes[0] == 192 && bytes[1] == 168)
+                {
+                    return true;
+                }
+            }
+
             return false;
         }
     }
