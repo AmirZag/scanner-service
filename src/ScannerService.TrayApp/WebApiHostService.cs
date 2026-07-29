@@ -1,4 +1,8 @@
-﻿using FluentValidation;
+﻿using System.Diagnostics;
+using System.Globalization;
+using System.Net;
+using System.Text;
+using FluentValidation;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -6,6 +10,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using NJsonSchema;
 using Scalar.AspNetCore;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
@@ -16,16 +21,6 @@ using ScannerService.Infrastructure.Services;
 using ScannerService.TrayApp.Configurations;
 using Serilog;
 using Serilog.Events;
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Net;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace ScannerService.TrayApp;
 
@@ -71,7 +66,6 @@ public class WebApiHostService : IDisposable
             var loggingConfig = builder.Configuration.GetSection("Logging")
                 .Get<LoggingConfiguration>() ?? new LoggingConfiguration();
 
-            // Validate logging configuration
             var logValidation = Configurations.ConfigurationValidator.ValidateLoggingConfiguration(loggingConfig);
             if (!logValidation.IsValid)
             {
@@ -114,7 +108,6 @@ public class WebApiHostService : IDisposable
 
             builder.Host.UseSerilog();
 
-            // Try binding to requested port first, then alternatives
             var availablePort = await FindAvailablePortAsync(_requestedPort);
             if (availablePort != _requestedPort)
             {
@@ -139,15 +132,13 @@ public class WebApiHostService : IDisposable
             builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
             builder.Services.AddScoped<IExportSettingRepository, ExportSettingRepository>();
             builder.Services.AddScoped<IScanJobService, ScanJobService>();
+            builder.Services.AddScoped<IRecentScansService, Infrastructure.Services.RecentScansService>();
 
             builder.Services.AddValidatorsFromAssemblyContaining<UpsertProfileValidator>();
 
-            // Add HttpClient factory for proper HTTP client management
             builder.Services.AddHttpClient();
 
             builder.Services.AddEndpointsApiExplorer();
-
-            // Configure NSwag with document name "openapi"
             builder.Services.AddOpenApiDocument(config =>
             {
                 config.DocumentName = "openapi";
@@ -165,7 +156,6 @@ public class WebApiHostService : IDisposable
 
             _app = builder.Build();
 
-            // Configure request body size limits
             _app.Use(async (context, next) =>
             {
                 // For scan requests, we might receive larger payloads
@@ -183,10 +173,9 @@ public class WebApiHostService : IDisposable
 
             using (var scope = _app.Services.CreateScope())
             {
-                await scope.ServiceProvider.GetRequiredService<Context>().Database.EnsureCreatedAsync();
+                await scope.ServiceProvider.GetRequiredService<Context>().Database.EnsureCreatedAsync(_cts?.Token ?? CancellationToken.None);
             }
 
-            // Serve the OpenAPI JSON at /openapi/openapi.json
             _app.UseOpenApi(options =>
             {
                 options.Path = "/openapi/{documentName}.json";
@@ -206,8 +195,6 @@ public class WebApiHostService : IDisposable
                 MaxRequests = 100, // 100 requests per minute
                 Window = TimeSpan.FromMinutes(1)
             });
-
-            // Add request logging middleware
             _app.Use(async (context, next) =>
             {
                 var startTime = DateTime.UtcNow;
@@ -236,7 +223,7 @@ public class WebApiHostService : IDisposable
 
             ConfigureEndpoints(_app);
 
-            _runTask = _app.RunAsync(_cts.Token);
+            _runTask = _app.RunAsync(_cts?.Token ?? CancellationToken.None);
             IsRunning = true;
 
             Log.Information("Scanner Service API started successfully on port {ActualPort} (requested: {RequestedPort})", ActualPort, _requestedPort);
@@ -333,9 +320,9 @@ public class WebApiHostService : IDisposable
         .Produces(StatusCodes.Status200OK)
         .Produces(StatusCodes.Status404NotFound);
 
-        app.MapPost("/api/profiles", async (UpsertProfileDto req, IProfileRepository svc, IValidator<UpsertProfileDto> validator) =>
+        app.MapPost("/api/profiles", async (UpsertProfileDto req, IProfileRepository svc, IValidator<UpsertProfileDto> validator, CancellationToken ct) =>
         {
-            var validationResult = await validator.ValidateAsync(req);
+            var validationResult = await validator.ValidateAsync(req, ct);
             if (!validationResult.IsValid)
             {
                 return Results.ValidationProblem(validationResult.ToDictionary());
@@ -351,9 +338,9 @@ public class WebApiHostService : IDisposable
         .Accepts<UpsertProfileDto>("application/json");
 
         // Partial update endpoint: only provided fields are updated, null fields are unchanged
-        app.MapPatch("/api/profiles/{id}", async (int id, UpdateProfileDto req, IProfileRepository svc, IValidator<UpdateProfileDto> validator) =>
+        app.MapPatch("/api/profiles/{id}", async (int id, UpdateProfileDto req, IProfileRepository svc, IValidator<UpdateProfileDto> validator, CancellationToken ct) =>
         {
-            var validationResult = await validator.ValidateAsync(req);
+            var validationResult = await validator.ValidateAsync(req, ct);
             if (!validationResult.IsValid)
             {
                 return Results.ValidationProblem(validationResult.ToDictionary());
@@ -379,9 +366,9 @@ public class WebApiHostService : IDisposable
         .Produces(StatusCodes.Status204NoContent)
         .Produces(StatusCodes.Status404NotFound);
 
-        app.MapPost("/api/scan", async (ScanRequestDto req, IScanJobService svc, IValidator<ScanRequestDto> validator) =>
+        app.MapPost("/api/scan", async (ScanRequestDto req, IScanJobService svc, IValidator<ScanRequestDto> validator, CancellationToken ct) =>
         {
-            var validationResult = await validator.ValidateAsync(req);
+            var validationResult = await validator.ValidateAsync(req, ct);
             if (!validationResult.IsValid)
             {
                 return Results.ValidationProblem(validationResult.ToDictionary());
@@ -412,9 +399,9 @@ public class WebApiHostService : IDisposable
             .WithTags("Export Settings")
             .Produces(StatusCodes.Status200OK);
 
-        app.MapPut("/api/export-settings", async (ExportSettingDto dto, IExportSettingRepository svc, IValidator<ExportSettingDto> validator) =>
+        app.MapPut("/api/export-settings", async (ExportSettingDto dto, IExportSettingRepository svc, IValidator<ExportSettingDto> validator, CancellationToken ct) =>
         {
-            var validationResult = await validator.ValidateAsync(dto);
+            var validationResult = await validator.ValidateAsync(dto, ct);
             if (!validationResult.IsValid)
             {
                 return Results.ValidationProblem(validationResult.ToDictionary());
@@ -428,6 +415,12 @@ public class WebApiHostService : IDisposable
         .Produces(StatusCodes.Status200OK)
         .ProducesValidationProblem()
         .Accepts<ExportSettingDto>("application/json");
+
+        app.MapGet("/api/recent-scans/{count:int:min(1):max(100)}", async (int count, IRecentScansService svc, CancellationToken ct) =>
+            Results.Ok(await svc.GetRecentScansAsync(count, ct)))
+        .WithName("GetRecentScans")
+        .WithTags("Recent Scans")
+        .Produces<RecentScansResponseDto>(StatusCodes.Status200OK);
     }
 
     public void Dispose()

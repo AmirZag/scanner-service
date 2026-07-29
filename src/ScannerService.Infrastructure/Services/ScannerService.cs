@@ -1,4 +1,6 @@
 ﻿using System.Diagnostics.CodeAnalysis;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
@@ -38,7 +40,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             {
                 return;
             }
-            _logger.LogInformation("Initilizing scanner context");
+            _logger.LogInformation("Initializing scanner context");
 
             ImageContext imageContext = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
                 ? new NAPS2.Images.Gdi.GdiImageContext()
@@ -51,12 +53,12 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
                 try
                 {
                     _context.SetUpWin32Worker();
-                    _logger.LogInformation("TWAIN Worker initilized successfully");
+                    _logger.LogInformation("TWAIN Worker initialized successfully");
                 }
                 catch (Exception ex)
                 {
                     _twainWorkerFailed = true;
-                    _logger.LogWarning(ex, "TWAIN worker setup failed. TWAIN scaninng will be unavailable, But WIA and ESCL will work normally");
+                    _logger.LogWarning(ex, "TWAIN worker setup failed. TWAIN scanning will be unavailable, but WIA and ESCL will work normally");
                 }
             }
 
@@ -88,7 +90,12 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             }
             try
             {
-                var devices = await _controller!.GetDeviceList(driver);
+                if (_controller == null)
+                {
+                    await InitializeAsync();
+                }
+                var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
+                var devices = await controller.GetDeviceList(driver);
                 scanners.AddRange(devices.Select(d => new ScannerDto(d.ID, d.Name, driver.ToString())));
                 _logger.LogDebug("Found {Count} devices for driver {Driver}", devices.Count, driver);
             }
@@ -172,7 +179,12 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 
         try
         {
-            await foreach (var image in _controller!.Scan(options))
+            if (_controller == null)
+            {
+                await InitializeAsync();
+            }
+            var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
+            await foreach (var image in controller.Scan(options))
             {
                 images.Add(image);
                 _logger.LogDebug("Captured image {ImageNumber} at {Timestamp}", images.Count, DateTime.UtcNow);
@@ -223,8 +235,8 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 
     private async Task<List<string>> SaveAsync(List<ProcessedImage> images, ScanJobConfiguration scanJobConfiguration)
     {
-            var files = new List<string>();
-            var name = scanJobConfiguration.FileName.Replace( "{datetime}",DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture));
+        var files = new List<string>();
+        var name = scanJobConfiguration.FileName.Replace("{datetime}", DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture));
 
         if (scanJobConfiguration.Format.Equals("PDF", StringComparison.OrdinalIgnoreCase))
         {
@@ -236,13 +248,10 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         }
         else if (scanJobConfiguration.Format.Equals("MultiPageTIFF", StringComparison.OrdinalIgnoreCase))
         {
-            for (int i = 0; i < images.Count; i++)
-            {
-                var path = Path.Combine(scanJobConfiguration.ExportPath, $"{name}_{i + 1}.tiff");
-                images[i].Save(path, ImageFileFormat.Tiff);
-                files.Add(path);
-            }
-            _logger.LogDebug("Saved {Count} TIFF files", files.Count);
+            var path = Path.Combine(scanJobConfiguration.ExportPath, $"{name}.tiff");
+            await SaveMultiPageTiffAsync(images, path);
+            files.Add(path);
+            _logger.LogDebug("Saved multi-page TIFF: {Path}", path);
         }
         else
         {
@@ -266,6 +275,93 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         return files;
     }
 
+    private async Task SaveMultiPageTiffAsync(List<ProcessedImage> images, string outputPath)
+    {
+        await Task.Run(() =>
+        {
+            var tiffEncoder = GetTiffEncoder();
+            using var firstBitmap = GetBitmapFromImage(images[0]);
+            using var encoderParams = new EncoderParameters(1);
+            encoderParams.Param[0] = new EncoderParameter(Encoder.SaveFlag, (long)EncoderValue.MultiFrame);
+
+            firstBitmap.Save(outputPath, tiffEncoder, encoderParams);
+            encoderParams.Param[0] = new EncoderParameter(Encoder.SaveFlag, (long)EncoderValue.FrameDimensionPage);
+
+            for (int i = 1; i < images.Count; i++)
+            {
+                using var bitmap = GetBitmapFromImage(images[i]);
+                firstBitmap.SaveAdd(bitmap, encoderParams);
+            }
+#pragma warning disable S4143 // Reusing encoderParams with different parameter values is intentional
+            encoderParams.Param[0] = new EncoderParameter(Encoder.SaveFlag, (long)EncoderValue.Flush);
+#pragma warning restore S4143
+            firstBitmap.SaveAdd(encoderParams);
+        });
+    }
+
+    private static ImageCodecInfo GetTiffEncoder()
+    {
+        var codecs = ImageCodecInfo.GetImageEncoders();
+        return codecs.FirstOrDefault(codec => codec.FormatID == ImageFormat.Tiff.Guid)
+            ?? throw new InvalidOperationException("TIFF encoder not found");
+    }
+
+    private static Bitmap GetBitmapFromImage(ProcessedImage image)
+    {
+        try
+        {
+#pragma warning disable S3011
+            var imageType = image.GetType();
+            var bitmapField = imageType.GetField("_bitmap", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (bitmapField != null && bitmapField.GetValue(image) is Bitmap bitmap)
+            {
+                return new Bitmap(bitmap);
+            }
+#pragma warning restore S3011
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.bmp");
+            try
+            {
+                image.Save(tempPath, ImageFileFormat.Bmp);
+                return new Bitmap(tempPath);
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); }
+                    catch { /* Ignore cleanup errors */ }
+                }
+            }
+        }
+        catch (Exception ex) when (IsCriticalException(ex))
+        {
+            throw;
+        }
+        catch
+        {
+            var fallbackPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.bmp");
+            try
+            {
+                image.Save(fallbackPath, ImageFileFormat.Bmp);
+                return new Bitmap(fallbackPath);
+            }
+            finally
+            {
+                if (File.Exists(fallbackPath))
+                {
+                    try { File.Delete(fallbackPath); }
+                    catch { /* Ignore cleanup errors */ }
+                }
+            }
+        }
+    }
+
+    private static bool IsCriticalException(Exception ex)
+    {
+        return ex is OutOfMemoryException or AccessViolationException or StackOverflowException;
+    }
+
     private async Task<ScanDevice?> FindDeviceAsync(string deviceId)
     {
         var drivers = GetDrivers();
@@ -274,11 +370,16 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         {
             if (driver == Driver.Twain && _twainWorkerFailed)
             {
-                //nothing
+                continue;
             }
             try
             {
-                var devices = await _controller!.GetDeviceList(driver);
+                if (_controller == null)
+                {
+                    await InitializeAsync();
+                }
+                var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
+                var devices = await controller.GetDeviceList(driver);
                 var device = devices.FirstOrDefault(d => d.ID == deviceId);
 
                 if (device != null)
@@ -288,7 +389,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Error searching for device i driver {Driver}", driver);
+                _logger.LogDebug(ex, "Error searching for device in driver {Driver}", driver);
             }
         }
         return null;

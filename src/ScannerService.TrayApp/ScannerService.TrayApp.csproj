@@ -8,6 +8,9 @@
 		<ApplicationManifest>app.manifest</ApplicationManifest>
 		<StartupObject>ScannerService.TrayApp.Program</StartupObject>
 		<NeutralLanguage>fa</NeutralLanguage>
+		<!-- Generate XML documentation file for API documentation -->
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<NoWarn>$(NoWarn);1591</NoWarn> <!-- Ignore missing XML comment warnings -->
 	</PropertyGroup>
 
 	<ItemGroup>

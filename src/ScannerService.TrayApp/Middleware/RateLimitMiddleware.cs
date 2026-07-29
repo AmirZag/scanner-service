@@ -47,7 +47,7 @@ public class RateLimitMiddleware
                 LogWarning(context, clientIp, counter.Count);
                 context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
                 context.Response.Headers.Append("Retry-After", Math.Ceiling((_options.Window - (DateTime.UtcNow - counter.WindowStart)).TotalSeconds).ToString("F0", CultureInfo.InvariantCulture));
-                await context.Response.WriteAsync("Rate limit exceeded. Please try again later.");
+                await context.Response.WriteAsync("Rate limit exceeded. Please try again later.", context.RequestAborted);
                 return;
             }
             else
@@ -68,9 +68,9 @@ public class RateLimitMiddleware
     private static string GetClientIp(HttpContext context)
     {
         // Try to get IP from X-Forwarded-For header first (for proxy scenarios)
-        if (context.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor) && !string.IsNullOrEmpty(forwardedFor))
+        if (context.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor) && forwardedFor.Count > 0)
         {
-            return forwardedFor.ToString()!;
+            return forwardedFor.ToString();
         }
 
         // Fall back to remote IP
