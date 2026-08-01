@@ -7,66 +7,51 @@ using ScannerService.Infrastructure.Persistence;
 
 namespace ScannerService.Infrastructure.Repositories;
 
-public class ExportSettingRepository : IExportSettingRepository
+public class ExportSettingRepository : RepositoryBase<ExportSetting>, IExportSettingRepository
 {
-    private readonly Context _context;
-    private readonly ILogger<ExportSettingRepository> _logger;
-
     public ExportSettingRepository(
         Context context,
         ILogger<ExportSettingRepository> logger)
+        : base(context, logger)
     {
-        _context = context;
-        _logger = logger;
     }
 
     public async Task<ExportSettingDto> GetExportSettingAsync()
     {
-        _logger.LogDebug("Retrieving export settings");
+        Logger.LogDebug("Retrieving export settings");
         var entity = await GetExportSettingEntityAsync();
         return new ExportSettingDto(entity.Format, entity.ExportPath, entity.FileName);
     }
 
     public async Task UpdateExportSettingAsync(ExportSettingDto exportSettingDto)
     {
-        _logger.LogInformation("Updating export settings");
+        Logger.LogInformation("Updating export settings");
         var entity = await GetExportSettingEntityAsync();
 
-        if (exportSettingDto.Format != null)
-        {
-            entity.Format = exportSettingDto.Format;
-        }
-        if (exportSettingDto.ExportPath != null)
-        {
-            entity.ExportPath = exportSettingDto.ExportPath;
-        }
-        if (exportSettingDto.FileName != null)
-        {
-            entity.FileName = exportSettingDto.FileName;
-        }
+        entity.Update(
+            exportSettingDto.Format,
+            exportSettingDto.ExportPath,
+            exportSettingDto.FileName
+        );
 
-        entity.UpdatedAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
+        await Context.SaveChangesAsync();
 
-        _logger.LogInformation("Export settings updated successfully");
+        Logger.LogInformation("Export settings updated successfully");
     }
 
     public async Task<ExportSetting> GetExportSettingEntityAsync()
     {
-        var entity = await _context.ExportSettings.FirstOrDefaultAsync();
+        var entity = await Context.ExportSettings.FirstOrDefaultAsync();
 
         if (entity is null)
         {
-            _logger.LogInformation("No export setting found, Creating default");
+            Logger.LogInformation("No export setting found, Creating default");
 
-            entity = new ExportSetting
-            {
-                Format = "PDF",
-                ExportPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Scans")
-            };
+            entity = ExportSetting.CreateDefault();
+            entity.ExportPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Scans");
 
-            _context.ExportSettings.Add(entity);
-            await _context.SaveChangesAsync();
+            Context.ExportSettings.Add(entity);
+            await Context.SaveChangesAsync();
         }
         return entity;
     }

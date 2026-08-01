@@ -1,65 +1,58 @@
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Globalization;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Primitives;
 using Serilog;
 
 namespace ScannerService.TrayApp.Middleware;
 
 /// <summary>
-/// Simple rate limiting middleware to prevent API abuse
-/// Limits requests per IP address within a time window
+/// Simple rate limiting middleware to prevent API abuse.
+/// Limits requests per IP address within a time window.
+/// Uses IMemoryCache for automatic expiration and cleanup.
 /// </summary>
 public class RateLimitMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly RateLimitOptions _options;
+    private readonly IMemoryCache _cache;
 
-    // Track request counts per IP
-    private readonly ConcurrentDictionary<string, RateLimitCounter> _counters = new();
-
-    public RateLimitMiddleware(RequestDelegate next, RateLimitOptions options)
+    public RateLimitMiddleware(RequestDelegate next, RateLimitOptions options, IMemoryCache cache)
     {
         _next = next;
         _options = options;
+        _cache = cache;
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
         var clientIp = GetClientIp(context);
 
-        // Check rate limit
-        if (_counters.TryGetValue(clientIp, out var counter))
-        {
-            // Clean up old entries periodically
-            CleanupCounters();
+        // Get or create the rate limit counter for this IP
+        var counterKey = $"ratelimit_{clientIp}";
 
-            if (counter.IsExpired(_options.Window))
+        if (_cache.TryGetValue<RateLimitCounter>(counterKey, out var counter) && counter != null)
+        {
+            if (counter.Count >= _options.MaxRequests)
             {
-                // Reset counter if window expired
-                _counters.TryUpdate(clientIp, new RateLimitCounter(1, DateTime.UtcNow), counter);
-            }
-            else if (counter.Count >= _options.MaxRequests)
-            {
-                // Rate limit exceeded
+                // Rate limit exceeded - calculate retry-after
+                var retryAfter = Math.Ceiling((_options.Window - (DateTime.UtcNow - counter.WindowStart)).TotalSeconds);
                 LogWarning(context, clientIp, counter.Count);
+
                 context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-                context.Response.Headers.Append("Retry-After", Math.Ceiling((_options.Window - (DateTime.UtcNow - counter.WindowStart)).TotalSeconds).ToString("F0", CultureInfo.InvariantCulture));
+                context.Response.Headers.Append("Retry-After", retryAfter.ToString("F0", CultureInfo.InvariantCulture));
                 await context.Response.WriteAsync("Rate limit exceeded. Please try again later.", context.RequestAborted);
                 return;
             }
-            else
-            {
-                // Increment counter
-                _counters.TryUpdate(clientIp, counter.Increment(), counter);
-            }
+
+            // Increment the counter
+            _cache.Set(counterKey, counter.Increment(), counter.GetExpiration(_options.Window));
         }
         else
         {
-            // Add new counter
-            _counters.TryAdd(clientIp, new RateLimitCounter(1, DateTime.UtcNow));
+            // Add new counter with automatic expiration
+            _cache.Set(counterKey, new RateLimitCounter(1, DateTime.UtcNow), DateTimeOffset.UtcNow.Add(_options.Window));
         }
 
         await _next(context);
@@ -75,21 +68,6 @@ public class RateLimitMiddleware
 
         // Fall back to remote IP
         return context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-    }
-
-    private void CleanupCounters()
-    {
-        // Only cleanup occasionally to avoid performance impact
-        if (_counters.Count > 1000)
-        {
-            foreach (var kvp in _counters)
-            {
-                if (kvp.Value.IsExpired(_options.Window))
-                {
-                    _counters.TryRemove(kvp.Key, out _);
-                }
-            }
-        }
     }
 
     private static void LogWarning(HttpContext context, string clientIp, int requestCount)
@@ -113,9 +91,10 @@ internal sealed class RateLimitCounter
         WindowStart = windowStart;
     }
 
-    public bool IsExpired(TimeSpan window)
+    public DateTimeOffset GetExpiration(TimeSpan window)
     {
-        return DateTime.UtcNow - WindowStart > window;
+        // Set expiration to the end of the current window
+        return WindowStart.Add(window);
     }
 
     public RateLimitCounter Increment()
@@ -132,10 +111,10 @@ public class RateLimitOptions
     /// <summary>
     /// Maximum number of requests allowed per time window
     /// </summary>
-    public int MaxRequests { get; set; } = 60; // 60 requests per minute default
+    public int MaxRequests { get; set; } = Domain.Common.ApplicationConstants.RateLimit.DefaultMaxRequests;
 
     /// <summary>
     /// Time window for rate limiting
     /// </summary>
-    public TimeSpan Window { get; set; } = TimeSpan.FromMinutes(1);
+    public TimeSpan Window { get; set; } = TimeSpan.FromMinutes(Domain.Common.ApplicationConstants.RateLimit.DefaultWindowMinutes);
 }

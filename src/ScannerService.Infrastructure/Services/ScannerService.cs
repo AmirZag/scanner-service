@@ -21,6 +21,9 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
     private bool _initialized;
     private bool _twainWorkerFailed;
 
+    // Cached reflection field info for efficient bitmap extraction
+    private static readonly System.Reflection.FieldInfo? CachedBitmapField = GetBitmapFieldInfo();
+
     public ScannerService(ILogger<ScannerService> logger)
     {
         _logger = logger;
@@ -78,16 +81,17 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 
         await InitializeAsync();
 
-        var scanners = new List<ScannerDto>();
-
         var drivers = GetDrivers();
 
-        foreach (var driver in drivers)
+        // Query drivers in parallel for better performance
+        var driverTasks = drivers.Select(async driver =>
         {
             if (driver == Driver.Twain && _twainWorkerFailed)
             {
                 _logger.LogDebug("Skipping TWAIN driver due to worker initialization failure");
+                return (Scanners: new List<ScannerDto>(), Driver: driver);
             }
+
             try
             {
                 if (_controller == null)
@@ -96,14 +100,25 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
                 }
                 var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
                 var devices = await controller.GetDeviceList(driver);
-                scanners.AddRange(devices.Select(d => new ScannerDto(d.ID, d.Name, driver.ToString())));
+                var scannerDtos = devices.Select(d => new ScannerDto(d.ID, d.Name, driver.ToString())).ToList();
                 _logger.LogDebug("Found {Count} devices for driver {Driver}", devices.Count, driver);
+                return (Scanners: scannerDtos, Driver: driver);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to get devices for driver {Driver}", driver);
+                return (Scanners: new List<ScannerDto>(), Driver: driver);
             }
+        }).ToList();
+
+        var results = await Task.WhenAll(driverTasks);
+
+        var scanners = new List<ScannerDto>();
+        foreach (var (driverScanners, _) in results)
+        {
+            scanners.AddRange(driverScanners);
         }
+
         _logger.LogInformation("Found {TotalCount} total scanners across all drivers", scanners.Count);
         return scanners;
     }
@@ -194,6 +209,13 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         {
             var duration = DateTime.UtcNow - scanStartTime;
             _logger.LogError(ex, "Error during scan operation - Duration: {DurationMs}ms", duration.TotalMilliseconds);
+
+            // Dispose any images that were captured before the error
+            foreach (var img in images)
+            {
+                img.Dispose();
+            }
+
             return ScanExecutionResult.Fail($"Scan operation failed: {ex.Message}");
         }
 
@@ -215,16 +237,15 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         {
             var duration = DateTime.UtcNow - scanStartTime;
             _logger.LogError(ex, "Failed to save scanned images - Duration: {DurationMs}ms", duration.TotalMilliseconds);
+            return ScanExecutionResult.Fail($"Failed to save scanned images: {ex.Message}");
+        }
+        finally
+        {
+            // Always dispose images, even on success
             foreach (var img in images)
             {
                 img.Dispose();
             }
-            return ScanExecutionResult.Fail($"Failed to save scanned images: {ex.Message}");
-        }
-
-        foreach (var img in images)
-        {
-            img.Dispose();
         }
 
         var totalDuration = DateTime.UtcNow - scanStartTime;
@@ -306,41 +327,55 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             ?? throw new InvalidOperationException("TIFF encoder not found");
     }
 
+    /// <summary>
+    /// Extracts a Bitmap from a ProcessedImage.
+    /// First attempts to use the cached reflection field info (if available).
+    /// Falls back to temp file approach if reflection fails or is not available.
+    /// </summary>
     private static Bitmap GetBitmapFromImage(ProcessedImage image)
     {
-        try
+        // Try using cached reflection field info (optimized path)
+        if (CachedBitmapField != null)
         {
-#pragma warning disable S3011
-            var imageType = image.GetType();
-            var bitmapField = imageType.GetField("_bitmap", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (bitmapField != null && bitmapField.GetValue(image) is Bitmap bitmap)
-            {
-                return new Bitmap(bitmap);
-            }
-#pragma warning restore S3011
-
-            var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.bmp");
             try
             {
-                image.Save(tempPath, ImageFileFormat.Bmp);
-                return new Bitmap(tempPath);
-            }
-            finally
-            {
-                if (File.Exists(tempPath))
+                if (CachedBitmapField.GetValue(image) is Bitmap bitmap)
                 {
-                    try { File.Delete(tempPath); }
-                    catch { /* Ignore cleanup errors */ }
+                    // Clone the bitmap to avoid ownership issues
+                    return new Bitmap(bitmap);
                 }
             }
+            catch
+            {
+                // Reflection failed, fall through to temp file approach
+            }
+        }
+
+        // Fallback: Use temp file approach (reliable but slower)
+        return GetBitmapViaTempFile(image);
+    }
+
+    /// <summary>
+    /// Extracts a Bitmap from ProcessedImage by saving to a temporary file.
+    /// This is the reliable fallback method that works regardless of NAPS2 internals.
+    /// </summary>
+    private static Bitmap GetBitmapViaTempFile(ProcessedImage image)
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), $"scan_{Guid.NewGuid()}.bmp");
+        try
+        {
+            image.Save(tempPath, ImageFileFormat.Bmp);
+            return new Bitmap(tempPath);
         }
         catch (Exception ex) when (IsCriticalException(ex))
         {
+            // Re-throw critical exceptions
             throw;
         }
         catch
         {
-            var fallbackPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.bmp");
+            // If temp file approach fails, try one more time with a different path
+            var fallbackPath = Path.Combine(Path.GetTempPath(), $"scan_fallback_{Guid.NewGuid()}.bmp");
             try
             {
                 image.Save(fallbackPath, ImageFileFormat.Bmp);
@@ -348,14 +383,50 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             }
             finally
             {
+                // Clean up fallback file
                 if (File.Exists(fallbackPath))
                 {
                     try { File.Delete(fallbackPath); }
                     catch { /* Ignore cleanup errors */ }
                 }
             }
+            throw;
+        }
+        finally
+        {
+            // Clean up temp file
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); }
+                catch { /* Ignore cleanup errors */ }
+            }
         }
     }
+
+    /// <summary>
+    /// Safely retrieves the bitmap field info from ProcessedImage type using reflection.
+    /// Returns null if the field cannot be found (e.g., NAPS2 version changed).
+    /// The result is cached to avoid repeated reflection overhead.
+    /// Note: Reflection is used here as an optimization over the temp file fallback.
+    /// The code gracefully handles reflection failures by falling back to temp file approach.
+    /// </summary>
+#pragma warning disable S3011 // Reflection required for NAPS2 interoperability - has safe fallback
+    private static System.Reflection.FieldInfo? GetBitmapFieldInfo()
+    {
+        try
+        {
+            var imageType = typeof(ProcessedImage);
+            var field = imageType.GetField("_bitmap", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            return field;
+        }
+        catch
+        {
+            // If reflection fails (e.g., obfuscated assembly, changed internals), return null
+            // The code will fall back to temp file approach
+            return null;
+        }
+    }
+#pragma warning restore S3011
 
     private static bool IsCriticalException(Exception ex)
     {
@@ -366,12 +437,14 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
     {
         var drivers = GetDrivers();
 
-        foreach (var driver in drivers)
+        // Query drivers in parallel, but return as soon as we find the device
+        var driverTasks = drivers.Select(async driver =>
         {
             if (driver == Driver.Twain && _twainWorkerFailed)
             {
-                continue;
+                return (Device: (ScanDevice?)null, Driver: driver);
             }
+
             try
             {
                 if (_controller == null)
@@ -381,17 +454,26 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
                 var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
                 var devices = await controller.GetDeviceList(driver);
                 var device = devices.FirstOrDefault(d => d.ID == deviceId);
-
-                if (device != null)
-                {
-                    return device;
-                }
+                return (Device: device, Driver: driver);
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Error searching for device in driver {Driver}", driver);
+                return (Device: (ScanDevice?)null, Driver: driver);
+            }
+        }).ToList();
+
+        var results = await Task.WhenAll(driverTasks);
+
+        // Return first non-null device
+        foreach (var (device, _) in results)
+        {
+            if (device != null)
+            {
+                return device;
             }
         }
+
         return null;
     }
 }

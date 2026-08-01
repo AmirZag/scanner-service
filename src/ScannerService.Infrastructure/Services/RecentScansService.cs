@@ -28,15 +28,6 @@ namespace ScannerService.Infrastructure.Services;
 /// </remarks>
 public partial class RecentScansService : IRecentScansService
 {
-    /// <summary>Maximum directory depth for recursive scanning (prevents excessive filesystem traversal)</summary>
-    private const int MaxDepth = 3;
-
-    /// <summary>Safety limit to prevent excessive scanning on directories with many files</summary>
-    private const int MaxFiles = 1000;
-
-    /// <summary>Supported file extensions for scan files</summary>
-    private static readonly string[] SupportedExtensions = { ".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp" };
-
     private readonly Context _context;
     private readonly ILogger<RecentScansService> _logger;
 
@@ -52,7 +43,7 @@ public partial class RecentScansService : IRecentScansService
         _logger.LogInformation("Getting recent scans - Count: {Count}", count);
 
         // Get export path from database
-        var exportSetting = await _context.ExportSettings.FindAsync([1], cancellationToken);
+        var exportSetting = await _context.ExportSettings.FindAsync([Domain.Common.ApplicationConstants.Database.DefaultExportSettingId], cancellationToken);
         var exportPath = exportSetting?.ExportPath;
 
         // Use default if not set
@@ -116,43 +107,46 @@ public partial class RecentScansService : IRecentScansService
         var files = new List<ScanFileRecord>();
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (currentDepth > MaxDepth)
+        if (currentDepth > Domain.Common.ApplicationConstants.RecentScans.MaxDepth)
         {
             return files;
         }
 
         try
         {
-            // Get all files in current directory with supported extensions
-            foreach (var extension in SupportedExtensions)
-            {
-                var matchingFiles = Directory.EnumerateFiles(directory, $"*{extension}", SearchOption.TopDirectoryOnly);
-                foreach (var filePath in matchingFiles)
+            // Single enumeration of all files, filtered by supported extensions
+            var allFiles = Directory.EnumerateFiles(directory, "*.*", SearchOption.TopDirectoryOnly)
+                .Where(filePath =>
                 {
-                    if (files.Count >= MaxFiles)
-                    {
-                        _logger.LogWarning("Reached maximum file limit ({MaxFiles})", MaxFiles);
-                        return files;
-                    }
+                    var ext = Path.GetExtension(filePath);
+                    return Domain.Common.ApplicationConstants.SupportedExtensions.ScanFiles.Contains(ext, StringComparer.OrdinalIgnoreCase);
+                });
 
-                    var fileInfo = new FileInfo(filePath);
-                    files.Add(new ScanFileRecord(
-                        fileInfo.Name,
-                        filePath,
-                        fileInfo.Extension,
-                        fileInfo.Length,
-                        fileInfo.CreationTimeUtc
-                    ));
+            foreach (var filePath in allFiles)
+            {
+                if (files.Count >= Domain.Common.ApplicationConstants.RecentScans.MaxFiles)
+                {
+                    _logger.LogWarning("Reached maximum file limit ({MaxFiles})", Domain.Common.ApplicationConstants.RecentScans.MaxFiles);
+                    return files;
                 }
+
+                var fileInfo = new FileInfo(filePath);
+                files.Add(new ScanFileRecord(
+                    fileInfo.Name,
+                    filePath,
+                    fileInfo.Extension,
+                    fileInfo.Length,
+                    fileInfo.CreationTimeUtc
+                ));
             }
 
             // Recursively scan subdirectories
-            if (currentDepth < MaxDepth)
+            if (currentDepth < Domain.Common.ApplicationConstants.RecentScans.MaxDepth)
             {
                 var subdirectories = Directory.EnumerateDirectories(directory);
                 foreach (var subdirectory in subdirectories)
                 {
-                    if (files.Count >= MaxFiles)
+                    if (files.Count >= Domain.Common.ApplicationConstants.RecentScans.MaxFiles)
                     {
                         return files;
                     }

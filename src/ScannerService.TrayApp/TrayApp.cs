@@ -126,39 +126,7 @@ public class TrayApp : ApplicationContext
         var loggingConfig = configuration.GetSection("Logging")
             .Get<LoggingConfiguration>() ?? new LoggingConfiguration();
 
-        var logPath = Path.Combine(AppContext.BaseDirectory, loggingConfig.File.Path);
-        var logDirectory = Path.GetDirectoryName(logPath);
-
-        if (!string.IsNullOrEmpty(logDirectory) && !Directory.Exists(logDirectory))
-        {
-            Directory.CreateDirectory(logDirectory);
-        }
-
-        var rollingInterval = loggingConfig.File.RollingInterval.ToLowerInvariant() switch
-        {
-            "minute" => RollingInterval.Minute,
-            "hour" => RollingInterval.Hour,
-            "day" => RollingInterval.Day,
-            "month" => RollingInterval.Month,
-            "year" => RollingInterval.Year,
-            _ => RollingInterval.Day
-        };
-
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Information()
-            .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
-            .MinimumLevel.Override("System", LogEventLevel.Warning)
-            .Enrich.FromLogContext()
-            .WriteTo.File(
-                logPath,
-                formatProvider: CultureInfo.InvariantCulture,
-                rollingInterval: rollingInterval,
-                retainedFileCountLimit: loggingConfig.File.RetainedFileCountLimit,
-                fileSizeLimitBytes: loggingConfig.File.FileSizeLimitBytes,
-                rollOnFileSizeLimit: loggingConfig.File.RollOnFileSizeLimit,
-                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
-            .CreateLogger();
-
+        SerilogConfigurationExtensions.InitializeSerilog(loggingConfig, AppContext.BaseDirectory);
         Log.Information("Scanner Service Tray Application starting");
     }
 

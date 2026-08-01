@@ -72,40 +72,7 @@ public class WebApiHostService : IDisposable
                 throw new InvalidOperationException("Logging configuration validation failed: " + string.Join("; ", logValidation.Errors));
             }
 
-            var logPath = Path.Combine(AppContext.BaseDirectory, loggingConfig.File.Path);
-            var logDirectory = Path.GetDirectoryName(logPath);
-
-            if (!string.IsNullOrEmpty(logDirectory) && !Directory.Exists(logDirectory))
-            {
-                Directory.CreateDirectory(logDirectory);
-            }
-
-            var rollingInterval = loggingConfig.File.RollingInterval.ToLowerInvariant() switch
-            {
-                "minute" => RollingInterval.Minute,
-                "hour" => RollingInterval.Hour,
-                "day" => RollingInterval.Day,
-                "month" => RollingInterval.Month,
-                "year" => RollingInterval.Year,
-                _ => RollingInterval.Day
-            };
-
-            Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.Information()
-                .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
-                .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
-                .MinimumLevel.Override("System", LogEventLevel.Warning)
-                .Enrich.FromLogContext()
-                .WriteTo.File(
-                    logPath,
-                    formatProvider: CultureInfo.InvariantCulture,
-                    rollingInterval: rollingInterval,
-                    retainedFileCountLimit: loggingConfig.File.RetainedFileCountLimit,
-                    fileSizeLimitBytes: loggingConfig.File.FileSizeLimitBytes,
-                    rollOnFileSizeLimit: loggingConfig.File.RollOnFileSizeLimit,
-                    outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext} {Message:lj}{NewLine}{Exception}")
-                .CreateLogger();
-
+            SerilogConfigurationExtensions.InitializeSerilog(loggingConfig, AppContext.BaseDirectory);
             builder.Host.UseSerilog();
 
             var availablePort = await FindAvailablePortAsync(_requestedPort);
@@ -123,8 +90,15 @@ public class WebApiHostService : IDisposable
             });
 
             var dbPath = Path.Combine(AppContext.BaseDirectory, "scanner.db");
-            builder.Services.AddDbContext<Context>(options =>
+            builder.Services.AddDbContextFactory<Context>(options =>
                 options.UseSqlite(string.Format(CultureInfo.InvariantCulture, DataSourceFormat, dbPath)));
+
+            // Register DbContext as scoped using the factory
+            builder.Services.AddScoped<Context>(sp =>
+            {
+                var factory = sp.GetRequiredService<IDbContextFactory<Context>>();
+                return factory.CreateDbContext();
+            });
 
             builder.Services.AddSingleton<Infrastructure.Services.ScannerService>();
             builder.Services.AddSingleton<IScannerQueries>(sp => sp.GetRequiredService<Infrastructure.Services.ScannerService>());
@@ -133,6 +107,7 @@ public class WebApiHostService : IDisposable
             builder.Services.AddScoped<IExportSettingRepository, ExportSettingRepository>();
             builder.Services.AddScoped<IScanJobService, ScanJobService>();
             builder.Services.AddScoped<IRecentScansService, Infrastructure.Services.RecentScansService>();
+            builder.Services.AddMemoryCache();
 
             builder.Services.AddValidatorsFromAssemblyContaining<UpsertProfileValidator>();
 
@@ -161,12 +136,12 @@ public class WebApiHostService : IDisposable
                 // For scan requests, we might receive larger payloads
                 if (context.Request.Path.StartsWithSegments("/api/scan"))
                 {
-                    context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>()!.MaxRequestBodySize = 104857600; // 100 MB
+                    context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>()!.MaxRequestBodySize = Domain.Common.ApplicationConstants.FileSizes.OneHundredMegabytes;
                 }
                 else
                 {
                     // For other endpoints, limit to 1 MB
-                    context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>()!.MaxRequestBodySize = 1048576; // 1 MB
+                    context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>()!.MaxRequestBodySize = Domain.Common.ApplicationConstants.FileSizes.OneMegabyte;
                 }
                 await next();
             });
@@ -192,8 +167,8 @@ public class WebApiHostService : IDisposable
 
             _app.UseMiddleware<Middleware.RateLimitMiddleware>(new Middleware.RateLimitOptions
             {
-                MaxRequests = 100, // 100 requests per minute
-                Window = TimeSpan.FromMinutes(1)
+                MaxRequests = Domain.Common.ApplicationConstants.RateLimit.DefaultMaxRequests,
+                Window = TimeSpan.FromMinutes(Domain.Common.ApplicationConstants.RateLimit.DefaultWindowMinutes)
             });
             _app.Use(async (context, next) =>
             {
@@ -436,32 +411,52 @@ public class WebApiHostService : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static async Task<int> FindAvailablePortAsync(int startPort)
+    private static Task<int> FindAvailablePortAsync(int startPort)
     {
-        // Try the requested port first
-        if (await IsPortAvailableAsync(startPort))
+        // Get actively used TCP ports to avoid checking them
+        var usedPorts = new HashSet<int>();
+
+        try
         {
-            return startPort;
+            var tcpConnections = System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners();
+            foreach (var listener in tcpConnections)
+            {
+                if (listener.Address.Equals(IPAddress.Loopback) || listener.Address.Equals(IPAddress.Any))
+                {
+                    usedPorts.Add(listener.Port);
+                }
+            }
+        }
+        catch
+        {
+            // Fall back to checking ports directly if IPGlobalProperties fails
         }
 
-        // Try ports in the range (startPort to startPort + 100)
-        for (int port = startPort + 1; port <= startPort + 100; port++)
+        // Try the requested port first
+        if (!usedPorts.Contains(startPort) && IsPortAvailable(startPort))
         {
-            if (await IsPortAvailableAsync(port))
+            return Task.FromResult(startPort);
+        }
+
+        // Try ports in the range (startPort to startPort + MaxPortSearchRange)
+        var maxSearch = startPort + Domain.Common.ApplicationConstants.Ports.MaxPortSearchRange;
+        for (int port = startPort + 1; port <= maxSearch; port++)
+        {
+            if (!usedPorts.Contains(port) && IsPortAvailable(port))
             {
-                return port;
+                return Task.FromResult(port);
             }
         }
 
         // If no port found in that range, try any available port
-        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var availablePort = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return availablePort;
+        using var tempListener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        tempListener.Start();
+        var availablePort = ((IPEndPoint)tempListener.LocalEndpoint).Port;
+        tempListener.Stop();
+        return Task.FromResult(availablePort);
     }
 
-    private static async Task<bool> IsPortAvailableAsync(int port)
+    private static bool IsPortAvailable(int port)
     {
         try
         {
