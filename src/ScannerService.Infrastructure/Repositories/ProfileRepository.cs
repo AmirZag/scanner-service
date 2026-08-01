@@ -17,19 +17,20 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
     {
     }
 
-    public async Task<List<ProfileDto>> GetAllAsync()
+    public async Task<List<ProfileDto>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         Logger.LogDebug("Retrieving all profiles");
-        return await Context.Profiles.Select(MapToDto).ToListAsync();
+        return await Context.Profiles.Select(MapToDto).ToListAsync(cancellationToken);
     }
 
-    public new async Task<ProfileDto?> GetByIdAsync(int id)
+    public new async Task<ProfileDto?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         Logger.LogDebug("Retrieving profile {ProfileId}", id);
-        return await Context.Profiles.Where(x => x.Id == id).Select(MapToDto).FirstOrDefaultAsync();
+        var entity = await Context.Profiles.FindAsync([id], cancellationToken);
+        return entity == null ? null : ToDto(entity);
     }
 
-    public async Task<ProfileDto> AddAsync(UpsertProfileDto upsertProfileDto)
+    public async Task<ProfileDto> AddAsync(UpsertProfileDto upsertProfileDto, CancellationToken cancellationToken = default)
     {
         Logger.LogInformation("Adding profile {ProfileName}", upsertProfileDto.Name);
 
@@ -48,17 +49,17 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
         );
 
         Context.Profiles.Add(entity);
-        await Context.SaveChangesAsync();
+        await Context.SaveChangesAsync(cancellationToken);
 
         Logger.LogInformation("Profile added with ID {ProfileId}", entity.Id);
         return ToDto(entity);
     }
 
-    public async Task<ProfileDto?> UpdateAsync(int id, UpdateProfileDto updateProfileDto)
+    public async Task<ProfileDto?> UpdateAsync(int id, UpdateProfileDto updateProfileDto, CancellationToken cancellationToken = default)
     {
         Logger.LogInformation("Updating Profile {ProfileId} with partial update", id);
 
-        var entity = await Context.Profiles.FindAsync(id);
+        var entity = await Context.Profiles.FindAsync([id], cancellationToken);
         if (entity is null)
         {
             Logger.LogWarning("Profile {ProfileId} not found for update", id);
@@ -71,7 +72,7 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
 
         if (entity.UpdatedAt != oldUpdatedAt)
         {
-            await Context.SaveChangesAsync();
+            await Context.SaveChangesAsync(cancellationToken);
             Logger.LogInformation("Profile {ProfileId} updated successfully", id);
         }
         else
@@ -81,11 +82,11 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
 
         return ToDto(entity);
     }
-    public async Task<bool> DeleteAsync(int id)
+    public async Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default)
     {
         Logger.LogInformation("Deleting profile {ProfileId}", id);
 
-        var entity = await Context.Profiles.FindAsync(id);
+        var entity = await Context.Profiles.FindAsync([id], cancellationToken);
         if (entity is null)
         {
             Logger.LogWarning("Profile {ProfileId} not found for deletion", id);
@@ -93,7 +94,7 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
         }
 
         Context.Profiles.Remove(entity);
-        await Context.SaveChangesAsync();
+        await Context.SaveChangesAsync(cancellationToken);
 
         Logger.LogInformation("Profile {ProfileId} deleted successfully", id);
         return true;

@@ -16,17 +16,17 @@ public class ExportSettingRepository : RepositoryBase<ExportSetting>, IExportSet
     {
     }
 
-    public async Task<ExportSettingDto> GetExportSettingAsync()
+    public async Task<ExportSettingDto> GetExportSettingAsync(CancellationToken cancellationToken = default)
     {
         Logger.LogDebug("Retrieving export settings");
-        var entity = await GetExportSettingEntityAsync();
+        var entity = await GetExportSettingEntityAsync(cancellationToken);
         return new ExportSettingDto(entity.Format, entity.ExportPath, entity.FileName);
     }
 
-    public async Task UpdateExportSettingAsync(ExportSettingDto exportSettingDto)
+    public async Task UpdateExportSettingAsync(ExportSettingDto exportSettingDto, CancellationToken cancellationToken = default)
     {
         Logger.LogInformation("Updating export settings");
-        var entity = await GetExportSettingEntityAsync();
+        var entity = await GetExportSettingEntityAsync(cancellationToken);
 
         entity.Update(
             exportSettingDto.Format,
@@ -34,14 +34,14 @@ public class ExportSettingRepository : RepositoryBase<ExportSetting>, IExportSet
             exportSettingDto.FileName
         );
 
-        await Context.SaveChangesAsync();
+        await Context.SaveChangesAsync(cancellationToken);
 
         Logger.LogInformation("Export settings updated successfully");
     }
 
-    public async Task<ExportSetting> GetExportSettingEntityAsync()
+    public async Task<ExportSetting> GetExportSettingEntityAsync(CancellationToken cancellationToken = default)
     {
-        var entity = await Context.ExportSettings.FirstOrDefaultAsync();
+        var entity = await Context.ExportSettings.FirstOrDefaultAsync(cancellationToken);
 
         if (entity is null)
         {
@@ -51,7 +51,7 @@ public class ExportSettingRepository : RepositoryBase<ExportSetting>, IExportSet
             entity.ExportPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Scans");
 
             Context.ExportSettings.Add(entity);
-            await Context.SaveChangesAsync();
+            await Context.SaveChangesAsync(cancellationToken);
         }
         return entity;
     }

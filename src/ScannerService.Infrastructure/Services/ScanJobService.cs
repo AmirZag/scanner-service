@@ -49,7 +49,7 @@ public class ScanJobService : IScanJobService
                 throw new InvalidOperationException("Profile does not have a scanner device assigned");
             }
 
-            var exportSetting = await _exportSettingRepository.GetExportSettingAsync();
+            var exportSetting = await _exportSettingRepository.GetExportSettingAsync(cancellationToken);
             var exportPath = req.ExportPath ?? exportSetting.ExportPath;
 
             if (string.IsNullOrWhiteSpace(exportPath))

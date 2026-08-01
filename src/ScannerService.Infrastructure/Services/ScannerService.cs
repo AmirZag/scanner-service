@@ -28,33 +28,60 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 
     private Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
     {
+        // Fast path for already initialized case (no lock needed for reading)
         if (_initialized)
         {
             return Task.CompletedTask;
         }
 
-        if (_initializationTask != null)
-        {
-            return _initializationTask;
-        }
-
-        _initializationTask = Task.Run(() => InitializeInternalAsync(cancellationToken), cancellationToken);
-        return _initializationTask;
+        // Slow path: need to initialize - use lock for thread safety
+        return EnsureInitializedSlowPathAsync(cancellationToken);
     }
 
-    private async Task InitializeInternalAsync(CancellationToken cancellationToken)
+    private async Task EnsureInitializedSlowPathAsync(CancellationToken cancellationToken)
     {
+        // If a task is already in progress, just wait for it
+        if (_initializationTask != null)
+        {
+            await _initializationTask.ConfigureAwait(false);
+            return;
+        }
+
+        // Acquire lock to create new initialization task
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            if (_initialized || _initializationTask?.IsCompleted == true)
+            // Double-check after acquiring lock
+            if (_initialized)
             {
                 return;
             }
 
-            _logger.LogInformation("Initializing scanner context");
+            // Create the initialization task
+            _initializationTask = Task.Run(() => InitializeInternal(), cancellationToken);
+            await _initializationTask.ConfigureAwait(false);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
 
+    private void InitializeInternal()
+    {
+        // Note: This method is called while holding the lock
+        // No additional locking needed here
+
+        if (_initialized)
+        {
+            return;
+        }
+
+        _logger.LogInformation("Initializing scanner context");
+
+        try
+        {
             ImageContext imageContext = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
                 ? new NAPS2.Images.Gdi.GdiImageContext()
                 : new NAPS2.Images.ImageSharp.ImageSharpImageContext();
@@ -79,9 +106,11 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             _initialized = true;
             _logger.LogInformation("Scanner initialization complete");
         }
-        finally
+        catch (Exception ex)
         {
-            _lock.Release();
+            _logger.LogError(ex, "Scanner initialization failed");
+            _initialized = false;
+            throw;
         }
     }
 

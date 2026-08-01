@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Text;
@@ -7,9 +7,11 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using NJsonSchema;
 using Scalar.AspNetCore;
 using ScannerService.Application.DTOs;
@@ -94,7 +96,13 @@ public class WebApiHostService : IDisposable
                 options.UseSqlite(string.Format(CultureInfo.InvariantCulture, DataSourceFormat, dbPath)));
 
             builder.Services.AddSingleton<Infrastructure.Services.ScannerService>();
-            builder.Services.AddSingleton<IScannerQueries>(sp => sp.GetRequiredService<Infrastructure.Services.ScannerService>());
+            builder.Services.AddSingleton<IScannerQueries>(sp =>
+            {
+                var scannerService = sp.GetRequiredService<Infrastructure.Services.ScannerService>();
+                var memoryCache = sp.GetRequiredService<IMemoryCache>();
+                var logger = sp.GetRequiredService<ILogger<Infrastructure.Services.CachedScannerService>>();
+                return new Infrastructure.Services.CachedScannerService(scannerService, memoryCache, logger);
+            });
             builder.Services.AddSingleton<IScannerService>(sp => sp.GetRequiredService<Infrastructure.Services.ScannerService>());
             builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
             builder.Services.AddScoped<IExportSettingRepository, ExportSettingRepository>();
@@ -189,7 +197,7 @@ public class WebApiHostService : IDisposable
 
             _app.UseCors();
 
-            ConfigureEndpoints(_app);
+            _app.ConfigureAllEndpoints();
 
             _runTask = _app.RunAsync(_cts?.Token ?? CancellationToken.None);
             IsRunning = true;
@@ -256,141 +264,6 @@ public class WebApiHostService : IDisposable
             _cts = null;
             _runTask = null;
         }
-    }
-
-    private void ConfigureEndpoints(WebApplication app)
-    {
-        app.MapGet("/api/health", () =>
-            Results.Ok(new ApiHealthCheckDto(true, "1.0.0")))
-            .WithName("GetHealth")
-            .WithTags("Health")
-            .Produces<ApiHealthCheckDto>(StatusCodes.Status200OK);
-
-        app.MapGet("/api/scanners", async (IScannerQueries svc, CancellationToken ct) =>
-            Results.Ok(await svc.GetScannersListAsync(ct)))
-            .WithName("GetAllScanners")
-            .WithTags("Scanners")
-            .Produces(StatusCodes.Status200OK);
-
-        app.MapGet("/api/profiles", async (IProfileRepository svc) =>
-            Results.Ok(await svc.GetAllAsync()))
-            .WithName("GetAllProfiles")
-            .WithTags("Profiles")
-            .Produces(StatusCodes.Status200OK);
-
-        app.MapGet("/api/profiles/{id}", async (int id, IProfileRepository svc) =>
-        {
-            var p = await svc.GetByIdAsync(id);
-            return p == null ? Results.NotFound() : Results.Ok(p);
-        })
-        .WithName("GetProfileById")
-        .WithTags("Profiles")
-        .Produces(StatusCodes.Status200OK)
-        .Produces(StatusCodes.Status404NotFound);
-
-        app.MapPost("/api/profiles", async (UpsertProfileDto req, IProfileRepository svc, IValidator<UpsertProfileDto> validator, CancellationToken ct) =>
-        {
-            var validationResult = await validator.ValidateAsync(req, ct);
-            if (!validationResult.IsValid)
-            {
-                return Results.ValidationProblem(validationResult.ToDictionary());
-            }
-
-            var p = await svc.AddAsync(req);
-            return Results.Created($"/api/profiles/{p.Id}", p);
-        })
-        .WithName("CreateProfile")
-        .WithTags("Profiles")
-        .Produces(StatusCodes.Status201Created)
-        .ProducesValidationProblem()
-        .Accepts<UpsertProfileDto>("application/json");
-
-        // Partial update endpoint: only provided fields are updated, null fields are unchanged
-        app.MapPatch("/api/profiles/{id}", async (int id, UpdateProfileDto req, IProfileRepository svc, IValidator<UpdateProfileDto> validator, CancellationToken ct) =>
-        {
-            var validationResult = await validator.ValidateAsync(req, ct);
-            if (!validationResult.IsValid)
-            {
-                return Results.ValidationProblem(validationResult.ToDictionary());
-            }
-
-            var p = await svc.UpdateAsync(id, req);
-            return p == null ? Results.NotFound() : Results.Ok(p);
-        })
-        .WithName("UpdateProfile")
-        .WithTags("Profiles")
-        .Produces(StatusCodes.Status200OK)
-        .Produces(StatusCodes.Status404NotFound)
-        .ProducesValidationProblem()
-        .Accepts<UpdateProfileDto>("application/json");
-
-        app.MapDelete("/api/profiles/{id}", async (int id, IProfileRepository svc) =>
-        {
-            var deleted = await svc.DeleteAsync(id);
-            return deleted ? Results.NoContent() : Results.NotFound();
-        })
-        .WithName("DeleteProfile")
-        .WithTags("Profiles")
-        .Produces(StatusCodes.Status204NoContent)
-        .Produces(StatusCodes.Status404NotFound);
-
-        app.MapPost("/api/scan", async (ScanRequestDto req, IScanJobService svc, IValidator<ScanRequestDto> validator, CancellationToken ct) =>
-        {
-            var validationResult = await validator.ValidateAsync(req, ct);
-            if (!validationResult.IsValid)
-            {
-                return Results.ValidationProblem(validationResult.ToDictionary());
-            }
-
-            var result = await svc.StartScanJobAsync(req, ct);
-
-            if (!result.Success)
-            {
-                return Results.BadRequest(new { result.ErrorMessage, result.Duration });
-            }
-
-            // Stream the file directly from disk instead of loading into memory
-            var fileStream = new FileStream(result.FilePath!, FileMode.Open, FileAccess.Read, FileShare.Read);
-            return Results.File(fileStream, result.ContentType!, result.FileName!);
-        })
-        .WithName("PerformScan")
-        .WithTags("Scan")
-        .Produces(StatusCodes.Status200OK, contentType: "application/pdf")
-        .Produces(StatusCodes.Status200OK, contentType: "image/jpeg")
-        .Produces(StatusCodes.Status200OK, contentType: "image/png")
-        .Produces(StatusCodes.Status200OK, contentType: "application/zip")
-        .Produces(StatusCodes.Status400BadRequest)
-        .ProducesValidationProblem()
-        .Accepts<ScanRequestDto>("application/json");
-
-        app.MapGet("/api/export-settings", async (IExportSettingRepository svc) =>
-            Results.Ok(await svc.GetExportSettingAsync()))
-            .WithName("GetExportSettings")
-            .WithTags("Export Settings")
-            .Produces(StatusCodes.Status200OK);
-
-        app.MapPut("/api/export-settings", async (ExportSettingDto dto, IExportSettingRepository svc, IValidator<ExportSettingDto> validator, CancellationToken ct) =>
-        {
-            var validationResult = await validator.ValidateAsync(dto, ct);
-            if (!validationResult.IsValid)
-            {
-                return Results.ValidationProblem(validationResult.ToDictionary());
-            }
-
-            await svc.UpdateExportSettingAsync(dto);
-            return Results.Ok();
-        })
-        .WithName("UpdateExportSettings")
-        .WithTags("Export Settings")
-        .Produces(StatusCodes.Status200OK)
-        .ProducesValidationProblem()
-        .Accepts<ExportSettingDto>("application/json");
-
-        app.MapGet("/api/recent-scans/{count:int:min(1):max(100)}", async (int count, IRecentScansService svc, CancellationToken ct) =>
-            Results.Ok(await svc.GetRecentScansAsync(count, ct)))
-        .WithName("GetRecentScans")
-        .WithTags("Recent Scans")
-        .Produces<RecentScansResponseDto>(StatusCodes.Status200OK);
     }
 
     public void Dispose()

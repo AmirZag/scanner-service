@@ -11,6 +11,7 @@ namespace ScannerService.TrayApp.Middleware;
 /// Simple rate limiting middleware to prevent API abuse.
 /// Limits requests per IP address within a time window.
 /// Uses IMemoryCache for automatic expiration and cleanup.
+/// Thread-safe using SemaphoreSlim per IP key.
 /// </summary>
 public class RateLimitMiddleware
 {
@@ -28,32 +29,45 @@ public class RateLimitMiddleware
     public async Task InvokeAsync(HttpContext context)
     {
         var clientIp = GetClientIp(context);
-
-        // Get or create the rate limit counter for this IP
         var counterKey = $"ratelimit_{clientIp}";
 
-        if (_cache.TryGetValue<RateLimitCounter>(counterKey, out var counter) && counter != null)
+        // Get or create a lock for this specific IP to ensure atomic operations
+        var ipLock = _cache.GetOrCreate($"lock_{counterKey}", entry =>
         {
-            if (counter.Count >= _options.MaxRequests)
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(_options.Window.TotalMinutes * 2);
+            return new SemaphoreSlim(1, 1);
+        }) ?? throw new InvalidOperationException("Failed to create IP lock");
+
+        await ipLock.WaitAsync(context.RequestAborted);
+        try
+        {
+            if (_cache.TryGetValue<RateLimitCounter>(counterKey, out var counter) && counter != null)
             {
-                // Rate limit exceeded - calculate retry-after
-                var retryAfter = Math.Ceiling((_options.Window - (DateTime.UtcNow - counter.WindowStart)).TotalSeconds);
-                LogWarning(context, clientIp, counter.Count);
+                if (counter.Count >= _options.MaxRequests)
+                {
+                    // Rate limit exceeded - calculate retry-after
+                    var retryAfter = Math.Ceiling((_options.Window - (DateTime.UtcNow - counter.WindowStart)).TotalSeconds);
+                    LogWarning(context, clientIp, counter.Count);
 
-                context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-                context.Response.Headers.Append("Retry-After", retryAfter.ToString("F0", CultureInfo.InvariantCulture));
-                await context.Response.WriteAsync("Rate limit exceeded. Please try again later.", context.RequestAborted);
-                return;
+                    context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                    context.Response.Headers.Append("Retry-After", retryAfter.ToString("F0", CultureInfo.InvariantCulture));
+                    await context.Response.WriteAsync("Rate limit exceeded. Please try again later.", context.RequestAborted);
+                    return;
+                }
+
+                // Increment the counter (under lock, so atomic)
+                counter.Increment();
+                _cache.Set(counterKey, counter, counter.GetExpiration(_options.Window));
             }
-
-            // Increment the counter
-            counter.Increment();
-            _cache.Set(counterKey, counter, counter.GetExpiration(_options.Window));
+            else
+            {
+                // Add new counter with automatic expiration (under lock, so atomic)
+                _cache.Set(counterKey, new RateLimitCounter(1, DateTime.UtcNow), DateTimeOffset.UtcNow.Add(_options.Window));
+            }
         }
-        else
+        finally
         {
-            // Add new counter with automatic expiration
-            _cache.Set(counterKey, new RateLimitCounter(1, DateTime.UtcNow), DateTimeOffset.UtcNow.Add(_options.Window));
+            ipLock.Release();
         }
 
         await _next(context);
@@ -79,10 +93,12 @@ public class RateLimitMiddleware
 }
 
 /// <summary>
-/// Tracks request count for a specific IP
+/// Tracks request count for a specific IP. Thread-safe.
 /// </summary>
 internal sealed class RateLimitCounter
 {
+    private readonly object _lock = new();
+
     public int Count { get; private set; }
     public DateTime WindowStart { get; }
 
@@ -100,7 +116,10 @@ internal sealed class RateLimitCounter
 
     public void Increment()
     {
-        Count++;
+        lock (_lock)
+        {
+            Count++;
+        }
     }
 }
 

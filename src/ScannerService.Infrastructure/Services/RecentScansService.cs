@@ -3,6 +3,7 @@ using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Infrastructure.Persistence;
+using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace ScannerService.Infrastructure.Services;
@@ -66,7 +67,7 @@ public partial class RecentScansService : IRecentScansService
         }
 
         // Recursively find all supported files
-        var files = FindFilesRecursively(exportPath, 0, cancellationToken);
+        var files = await FindFilesRecursivelyAsync(exportPath, 0, cancellationToken);
 
         if (files.Count == 0)
         {
@@ -103,32 +104,86 @@ public partial class RecentScansService : IRecentScansService
     /// <param name="currentDepth">Current recursion depth (0 for root)</param>
     /// <param name="cancellationToken">Cancellation token for async operation</param>
     /// <returns>List of found files with metadata</returns>
-    private List<ScanFileRecord> FindFilesRecursively(string directory, int currentDepth, CancellationToken cancellationToken)
+    private async Task<List<ScanFileRecord>> FindFilesRecursivelyAsync(
+        string directory,
+        int currentDepth,
+        CancellationToken cancellationToken)
     {
-        var files = new List<ScanFileRecord>();
         cancellationToken.ThrowIfCancellationRequested();
 
         if (currentDepth > Domain.Common.ApplicationConstants.RecentScans.MaxDepth)
         {
+            return new List<ScanFileRecord>();
+        }
+
+        var files = new List<ScanFileRecord>();
+
+        // Get files from current directory
+        var currentDirFiles = await GetFilesFromDirectorySafeAsync(directory, cancellationToken);
+        files.AddRange(currentDirFiles);
+
+        // Check if we've reached the max file limit
+        if (files.Count >= Domain.Common.ApplicationConstants.RecentScans.MaxFiles)
+        {
             return files;
         }
 
+        // Recursively scan subdirectories if not at max depth
+        if (currentDepth < Domain.Common.ApplicationConstants.RecentScans.MaxDepth)
+        {
+            var subdirectories = await GetSubdirectoriesSafeAsync(directory, cancellationToken);
+
+            foreach (var subdirectory in subdirectories)
+            {
+                if (files.Count >= Domain.Common.ApplicationConstants.RecentScans.MaxFiles)
+                {
+                    break;
+                }
+
+                var subFiles = await FindFilesRecursivelyAsync(subdirectory, currentDepth + 1, cancellationToken);
+                files.AddRange(subFiles.Take(Domain.Common.ApplicationConstants.RecentScans.MaxFiles - files.Count));
+            }
+        }
+
+        return files;
+    }
+
+    /// <summary>
+    /// Gets files from a directory safely with error handling.
+    /// </summary>
+    private async Task<List<ScanFileRecord>> GetFilesFromDirectorySafeAsync(string directory, CancellationToken cancellationToken)
+    {
+        var files = new List<ScanFileRecord>();
+
         try
         {
-            // Single enumeration of all files, filtered by supported extensions
-            var allFiles = Directory.EnumerateFiles(directory, "*.*", SearchOption.TopDirectoryOnly)
-                .Where(filePath =>
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var allFiles = await Task.Run(() =>
+            {
+                var fileList = new List<string>();
+                var files = Directory.EnumerateFiles(directory, "*.*", SearchOption.TopDirectoryOnly)
+                    .Where(filePath =>
+                    {
+                        var ext = Path.GetExtension(filePath);
+                        return Domain.Common.ApplicationConstants.SupportedExtensions.ScanFiles.Contains(ext, StringComparer.OrdinalIgnoreCase);
+                    });
+
+                foreach (var filePath in files)
                 {
-                    var ext = Path.GetExtension(filePath);
-                    return Domain.Common.ApplicationConstants.SupportedExtensions.ScanFiles.Contains(ext, StringComparer.OrdinalIgnoreCase);
-                });
+                    cancellationToken.ThrowIfCancellationRequested();
+                    fileList.Add(filePath);
+                }
+
+                return fileList;
+            }, cancellationToken);
 
             foreach (var filePath in allFiles)
             {
                 if (files.Count >= Domain.Common.ApplicationConstants.RecentScans.MaxFiles)
                 {
                     _logger.LogWarning("Reached maximum file limit ({MaxFiles})", Domain.Common.ApplicationConstants.RecentScans.MaxFiles);
-                    return files;
+                    break;
                 }
 
                 var fileInfo = new FileInfo(filePath);
@@ -140,22 +195,10 @@ public partial class RecentScansService : IRecentScansService
                     fileInfo.CreationTimeUtc
                 ));
             }
-
-            // Recursively scan subdirectories
-            if (currentDepth < Domain.Common.ApplicationConstants.RecentScans.MaxDepth)
-            {
-                var subdirectories = Directory.EnumerateDirectories(directory);
-                foreach (var subdirectory in subdirectories)
-                {
-                    if (files.Count >= Domain.Common.ApplicationConstants.RecentScans.MaxFiles)
-                    {
-                        return files;
-                    }
-
-                    var subFiles = FindFilesRecursively(subdirectory, currentDepth + 1, cancellationToken);
-                    files.AddRange(subFiles);
-                }
-            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw; // Re-throw cancellation exceptions
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or DirectoryNotFoundException)
         {
@@ -167,6 +210,38 @@ public partial class RecentScansService : IRecentScansService
         }
 
         return files;
+    }
+
+    /// <summary>
+    /// Gets subdirectories safely with error handling.
+    /// </summary>
+    private Task<List<string>> GetSubdirectoriesSafeAsync(string directory, CancellationToken cancellationToken)
+    {
+        return Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var subdirectories = new List<string>();
+
+            try
+            {
+                foreach (var dir in Directory.EnumerateDirectories(directory))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    subdirectories.Add(dir);
+                }
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or DirectoryNotFoundException)
+            {
+                _logger.LogDebug(ex, "Cannot enumerate subdirectories of: {Directory}", directory);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error enumerating subdirectories of: {Directory}", directory);
+            }
+
+            return subdirectories;
+        }, cancellationToken);
     }
 
     /// <summary>
