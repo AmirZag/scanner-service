@@ -239,7 +239,7 @@ public static class EndpointConfigurationExtensions
             var result = await svc.UpdateExportSettingAsync(dto, ct);
             return result.IsFailure
                 ? Results.BadRequest(new { error = result.Error })
-                : Results.Ok(result);
+                : Results.Ok();
         })
         .WithName("UpdateExportSettings")
         .WithTags("Export Settings")
