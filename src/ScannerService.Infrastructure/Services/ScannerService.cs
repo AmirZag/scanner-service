@@ -1,4 +1,4 @@
-﻿using System.Drawing;
+using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -8,129 +8,33 @@ using NAPS2.Pdf;
 using NAPS2.Scan;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
+using ScannerService.Domain.Common;
 
 namespace ScannerService.Infrastructure.Services;
 
 public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 {
-    private ScanningContext? _context;
-    private ScanController? _controller;
-    private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly IScannerInitializer _initializer;
     private readonly ILogger<ScannerService> _logger;
-    private Task? _initializationTask;
-    private bool _initialized;
-    private bool _twainWorkerFailed;
 
-    public ScannerService(ILogger<ScannerService> logger)
+    public ScannerService(IScannerInitializer initializer, ILogger<ScannerService> _logger)
     {
-        _logger = logger;
-    }
-
-    private Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
-    {
-        // Fast path for already initialized case (no lock needed for reading)
-        if (_initialized)
-        {
-            return Task.CompletedTask;
-        }
-
-        // Slow path: need to initialize - use lock for thread safety
-        return EnsureInitializedSlowPathAsync(cancellationToken);
-    }
-
-    private async Task EnsureInitializedSlowPathAsync(CancellationToken cancellationToken)
-    {
-        // If a task is already in progress, just wait for it
-        if (_initializationTask != null)
-        {
-            await _initializationTask.ConfigureAwait(false);
-            return;
-        }
-
-        // Acquire lock to create new initialization task
-        await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
-
-        try
-        {
-            // Double-check after acquiring lock
-            if (_initialized)
-            {
-                return;
-            }
-
-            // Create the initialization task
-            _initializationTask = Task.Run(() => InitializeInternal(), cancellationToken);
-            await _initializationTask.ConfigureAwait(false);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    private void InitializeInternal()
-    {
-        // Note: This method is called while holding the lock
-        // No additional locking needed here
-
-        if (_initialized)
-        {
-            return;
-        }
-
-        _logger.LogInformation("Initializing scanner context");
-
-        try
-        {
-            ImageContext imageContext = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                ? new NAPS2.Images.Gdi.GdiImageContext()
-                : new NAPS2.Images.ImageSharp.ImageSharpImageContext();
-
-            _context = new ScanningContext(imageContext);
-
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                try
-                {
-                    _context.SetUpWin32Worker();
-                    _logger.LogInformation("TWAIN Worker initialized successfully");
-                }
-                catch (Exception ex)
-                {
-                    _twainWorkerFailed = true;
-                    _logger.LogWarning(ex, "TWAIN worker setup failed. TWAIN scanning will be unavailable, but WIA and ESCL will work normally");
-                }
-            }
-
-            _controller = new ScanController(_context);
-            _initialized = true;
-            _logger.LogInformation("Scanner initialization complete");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Scanner initialization failed");
-            _initialized = false;
-            throw;
-        }
-    }
-
-    private async Task InitializeAsync(CancellationToken cancellationToken = default)
-    {
-        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        _initializer = initializer;
+        this._logger = _logger;
     }
 
     public async Task<List<ScannerDto>> GetScannersListAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogDebug("Retrieving scanner list");
+        await _initializer.InitializeAsync(cancellationToken);
 
-        await InitializeAsync(cancellationToken);
-
-        var drivers = GetDrivers();
+        var drivers = ScannerDriverFactory.GetAvailableDrivers();
+        var controller = ((IScannerInitializerContext)_initializer).Controller;
 
         // Query drivers in parallel for better performance
         var driverTasks = drivers.Select(async driver =>
         {
-            if (driver == Driver.Twain && _twainWorkerFailed)
+            if (ScannerDriverFactory.ShouldSkipDriver(driver, _initializer.TwainWorkerFailed))
             {
                 _logger.LogDebug("Skipping TWAIN driver due to worker initialization failure");
                 return (Scanners: new List<ScannerDto>(), Driver: driver);
@@ -138,11 +42,6 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 
             try
             {
-                if (_controller == null)
-                {
-                    await InitializeAsync(cancellationToken);
-                }
-                var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
                 var devices = await controller.GetDeviceList(driver);
                 var scannerDtos = devices.Select(d => new ScannerDto(d.ID, d.Name, driver.ToString())).ToList();
                 _logger.LogDebug("Found {Count} devices for driver {Driver}", devices.Count, driver);
@@ -167,48 +66,17 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         return scanners;
     }
 
-    private static List<Driver> GetDrivers()
-    {
-        var drivers = new List<Driver>();
-
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            drivers.Add(Driver.Twain);
-            drivers.Add(Driver.Wia);
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-        {
-            drivers.Add(Driver.Sane);
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            drivers.Add(Driver.Twain);
-        }
-
-        drivers.Add(Driver.Escl);
-
-        return drivers;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _logger.LogInformation("Disposing scanner provider");
-
-        _context?.Dispose();
-        _lock.Dispose();
-
-        await Task.CompletedTask;
-    }
-
     public async Task<ScanExecutionResult> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration, CancellationToken cancellationToken = default)
     {
         var scanStartTime = DateTime.UtcNow;
         _logger.LogInformation("Starting scan operation - DeviceId: {DeviceId}, Format: {Format}, Resolution: {Resolution}",
             scanJobConfiguration.DeviceId, scanJobConfiguration.Format, scanJobConfiguration.Resolution);
 
-        await InitializeAsync(cancellationToken);
+        await _initializer.InitializeAsync(cancellationToken);
+        var context = ((IScannerInitializerContext)_initializer).Context;
+        var controller = ((IScannerInitializerContext)_initializer).Controller;
 
-        var device = await FindDeviceAsync(scanJobConfiguration.DeviceId, cancellationToken);
+        var device = await FindDeviceAsync(scanJobConfiguration.DeviceId, controller, cancellationToken);
 
         if (device == null)
         {
@@ -220,31 +88,18 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         {
             Device = device,
             Dpi = scanJobConfiguration.Resolution,
-            BitDepth = scanJobConfiguration.BitDepth switch
-            {
-                "BlackAndWhite" => BitDepth.BlackAndWhite,
-                "Grayscale" => BitDepth.Grayscale,
-                _ => BitDepth.Color
-            },
-            PaperSource = scanJobConfiguration.PaperSource.Equals("Feeder", StringComparison.OrdinalIgnoreCase)
-            ? NAPS2.Scan.PaperSource.Feeder
-            : NAPS2.Scan.PaperSource.Flatbed
+            BitDepth = ParseBitDepth(scanJobConfiguration.BitDepth),
+            PaperSource = ParsePaperSource(scanJobConfiguration.PaperSource)
         };
 
         _logger.LogDebug("Scan options configured - Dpi: {Dpi}, BitDepth: {BitDepth}, PaperSource: {PaperSource}",
-            options.Dpi, scanJobConfiguration.BitDepth, options.PaperSource);
+            options.Dpi, options.BitDepth, options.PaperSource);
 
         var images = new List<ProcessedImage>();
 
         try
         {
-            if (_controller == null)
-            {
-                await InitializeAsync(cancellationToken);
-            }
-            var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
-// NAPS2 Scan method doesn't support cancellation tokens, using CancellationToken.None explicitly
-#pragma warning disable CA2016, S8949
+#pragma warning disable CA2016, S8949 // NAPS2 Scan method doesn't support cancellation tokens
             await foreach (var image in controller.Scan(options).WithCancellation(CancellationToken.None))
 #pragma warning restore CA2016, S8949
             {
@@ -278,7 +133,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         List<string> files;
         try
         {
-            files = await SaveAsync(images, scanJobConfiguration);
+            files = await SaveAsync(images, scanJobConfiguration, context);
         }
         catch (Exception ex)
         {
@@ -301,46 +156,79 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         return ScanExecutionResult.Succeed(files);
     }
 
-    private async Task<List<string>> SaveAsync(List<ProcessedImage> images, ScanJobConfiguration scanJobConfiguration)
+    public async ValueTask DisposeAsync()
+    {
+        _logger.LogInformation("Disposing scanner provider");
+
+        if (_initializer is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync();
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private async Task<List<string>> SaveAsync(List<ProcessedImage> images, ScanJobConfiguration config, ScanningContext context)
     {
         var files = new List<string>();
-        var name = scanJobConfiguration.FileName.Replace("{datetime}", DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture));
+        var name = config.FileName.Replace("{datetime}", DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture));
 
-        if (scanJobConfiguration.Format.Equals("PDF", StringComparison.OrdinalIgnoreCase))
+        if (config.Format.Equals(ScannerConstants.ExportFormat.PDF, StringComparison.OrdinalIgnoreCase))
         {
-
-            var path = Path.Combine(scanJobConfiguration.ExportPath, $"{name}.pdf");
-            await new PdfExporter(_context!).Export(path, images);
+            var path = Path.Combine(config.ExportPath, $"{name}.pdf");
+            await new PdfExporter(context).Export(path, images);
             files.Add(path);
             _logger.LogDebug("Saved PDF: {Path}", path);
         }
-        else if (scanJobConfiguration.Format.Equals("MultiPageTIFF", StringComparison.OrdinalIgnoreCase))
+        else if (config.Format.Equals(ScannerConstants.ExportFormat.MultiPageTIFF, StringComparison.OrdinalIgnoreCase))
         {
-            var path = Path.Combine(scanJobConfiguration.ExportPath, $"{name}.tiff");
+            var path = Path.Combine(config.ExportPath, $"{name}.tiff");
             await SaveMultiPageTiffAsync(images, path);
             files.Add(path);
             _logger.LogDebug("Saved multi-page TIFF: {Path}", path);
         }
         else
         {
-            var format = scanJobConfiguration.Format.ToLowerInvariant() switch
-            {
-                "png" => ImageFileFormat.Png,
-                "tiff" => ImageFileFormat.Tiff,
-                _ => ImageFileFormat.Jpeg
-            };
+            var format = ParseImageFileFormat(config.Format);
 
             for (int i = 0; i < images.Count; i++)
             {
-                var ext = scanJobConfiguration.Format.ToLowerInvariant();
-                var path = Path.Combine(scanJobConfiguration.ExportPath, $"{name}_{i + 1}.{ext}");
+                var ext = config.Format.ToLowerInvariant();
+                var path = Path.Combine(config.ExportPath, $"{name}_{i + 1}.{ext}");
                 images[i].Save(path, format);
                 files.Add(path);
             }
-            _logger.LogDebug("Saved {Count} {Format} files", files.Count, scanJobConfiguration.Format);
+            _logger.LogDebug("Saved {Count} {Format} files", files.Count, config.Format);
         }
 
         return files;
+    }
+
+    private static BitDepth ParseBitDepth(string bitDepth)
+    {
+        return bitDepth switch
+        {
+            ScannerConstants.BitDepth.BlackAndWhite => BitDepth.BlackAndWhite,
+            ScannerConstants.BitDepth.Grayscale => BitDepth.Grayscale,
+            _ => BitDepth.Color
+        };
+    }
+
+    private static NAPS2.Scan.PaperSource ParsePaperSource(string paperSource)
+    {
+        return paperSource.Equals(ScannerConstants.PaperSource.Feeder, StringComparison.OrdinalIgnoreCase)
+            ? NAPS2.Scan.PaperSource.Feeder
+            : NAPS2.Scan.PaperSource.Flatbed;
+    }
+
+    private static ImageFileFormat ParseImageFileFormat(string format)
+    {
+        return format.ToLowerInvariant() switch
+        {
+            "png" => ImageFileFormat.Png,
+            "tiff" => ImageFileFormat.Tiff,
+            _ => ImageFileFormat.Jpeg
+        };
     }
 
     private async Task SaveMultiPageTiffAsync(List<ProcessedImage> images, string outputPath)
@@ -374,19 +262,11 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             ?? throw new InvalidOperationException("TIFF encoder not found");
     }
 
-    /// <summary>
-    /// Extracts a Bitmap from a ProcessedImage.
-    /// Uses temp file approach for reliability.
-    /// </summary>
     private static Bitmap GetBitmapFromImage(ProcessedImage image)
     {
         return GetBitmapViaTempFile(image);
     }
 
-    /// <summary>
-    /// Extracts a Bitmap from ProcessedImage by saving to a temporary file.
-    /// This is the reliable method that works regardless of NAPS2 internals.
-    /// </summary>
     private static Bitmap GetBitmapViaTempFile(ProcessedImage image)
     {
         var tempPath = Path.Combine(Path.GetTempPath(), $"scan_{Guid.NewGuid()}.bmp");
@@ -406,25 +286,21 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         }
     }
 
-    private async Task<ScanDevice?> FindDeviceAsync(string deviceId, CancellationToken cancellationToken)
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Code", "IDE0060:Remove unused parameter", Justification = "CancellationToken kept for interface consistency")]
+    private async Task<ScanDevice?> FindDeviceAsync(string deviceId, ScanController controller, CancellationToken cancellationToken)
     {
-        var drivers = GetDrivers();
+        var drivers = ScannerDriverFactory.GetAvailableDrivers();
 
         // Query drivers in parallel, but return as soon as we find the device
         var driverTasks = drivers.Select(async driver =>
         {
-            if (driver == Driver.Twain && _twainWorkerFailed)
+            if (ScannerDriverFactory.ShouldSkipDriver(driver, _initializer.TwainWorkerFailed))
             {
                 return (Device: (ScanDevice?)null, Driver: driver);
             }
 
             try
             {
-                if (_controller == null)
-                {
-                    await InitializeAsync(cancellationToken);
-                }
-                var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
                 var devices = await controller.GetDeviceList(driver);
                 var device = devices.FirstOrDefault(d => d.ID == deviceId);
                 return (Device: device, Driver: driver);

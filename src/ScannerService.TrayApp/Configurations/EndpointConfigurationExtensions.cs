@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Application.Validators;
@@ -31,11 +32,62 @@ public static class EndpointConfigurationExtensions
     /// </summary>
     public static void ConfigureHealthEndpoints(this WebApplication app)
     {
+        // Simple health check
         app.MapGet("/api/health", () =>
             Results.Ok(new ApiHealthCheckDto(true, "1.0.0")))
             .WithName("GetHealth")
             .WithTags("Health")
             .Produces<ApiHealthCheckDto>(StatusCodes.Status200OK);
+
+        // Detailed health check with dependency status
+        app.MapGet("/api/health/detailed", async (
+            HttpContext context,
+            Infrastructure.Persistence.Context db,
+            IScannerQueries scanner,
+            CancellationToken ct) =>
+        {
+            var correlationId = context.Response.Headers["X-Correlation-ID"].ToString();
+            var dependencies = new Dictionary<string, bool>();
+
+            // Check database connectivity
+            try
+            {
+                dependencies["Database"] = await db.Database.CanConnectAsync(ct);
+            }
+            catch
+            {
+                dependencies["Database"] = false;
+            }
+
+            // Check scanner availability
+            try
+            {
+                var scanners = await scanner.GetScannersListAsync(ct);
+                dependencies["Scanners"] = scanners.Count > 0;
+            }
+            catch
+            {
+                dependencies["Scanners"] = false;
+            }
+
+            var isHealthy = dependencies.Values.All(v => v);
+            var result = isHealthy
+                ? DetailedApiHealthCheckDto.Healthy("1.0.0", dependencies, correlationId)
+                : DetailedApiHealthCheckDto.Unhealthy("1.0.0", dependencies, correlationId);
+
+            if (isHealthy)
+            {
+                return TypedResults.Ok(result);
+            }
+
+            // For unhealthy status, return 503 with the error details
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            return TypedResults.Ok(result);
+        })
+        .WithName("GetDetailedHealth")
+        .WithTags("Health")
+        .Produces<DetailedApiHealthCheckDto>(StatusCodes.Status200OK)
+        .Produces<DetailedApiHealthCheckDto>(StatusCodes.Status503ServiceUnavailable);
     }
 
     /// <summary>

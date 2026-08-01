@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Globalization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
@@ -11,19 +12,23 @@ namespace ScannerService.TrayApp.Middleware;
 /// Simple rate limiting middleware to prevent API abuse.
 /// Limits requests per IP address within a time window.
 /// Uses IMemoryCache for automatic expiration and cleanup.
-/// Thread-safe using SemaphoreSlim per IP key.
+/// Thread-safe using AsyncLock per IP key.
 /// </summary>
 public class RateLimitMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly RateLimitOptions _options;
     private readonly IMemoryCache _cache;
+    private readonly ConcurrentDictionary<string, AsyncLock> _ipLocks;
+    private readonly TimeSpan _lockExpiration;
 
     public RateLimitMiddleware(RequestDelegate next, RateLimitOptions options, IMemoryCache cache)
     {
         _next = next;
         _options = options;
         _cache = cache;
+        _ipLocks = new ConcurrentDictionary<string, AsyncLock>();
+        _lockExpiration = TimeSpan.FromMinutes(_options.Window.TotalMinutes * 2);
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -31,16 +36,13 @@ public class RateLimitMiddleware
         var clientIp = GetClientIp(context);
         var counterKey = $"ratelimit_{clientIp}";
 
-        // Get or create a lock for this specific IP to ensure atomic operations
-        var ipLock = _cache.GetOrCreate($"lock_{counterKey}", entry =>
-        {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(_options.Window.TotalMinutes * 2);
-            return new SemaphoreSlim(1, 1);
-        }) ?? throw new InvalidOperationException("Failed to create IP lock");
+        // Get or create a lock for this specific IP
+        var ipLock = _ipLocks.GetOrAdd(counterKey, _ => new AsyncLock());
 
-        await ipLock.WaitAsync(context.RequestAborted);
         try
         {
+            await ipLock.AcquireAsync(context.RequestAborted);
+
             if (_cache.TryGetValue<RateLimitCounter>(counterKey, out var counter) && counter != null)
             {
                 if (counter.Count >= _options.MaxRequests)
@@ -68,9 +70,28 @@ public class RateLimitMiddleware
         finally
         {
             ipLock.Release();
+
+            // Clean up expired locks periodically (every 100 requests to avoid overhead)
+            if (counterKey.GetHashCode() % 100 == 0)
+            {
+                CleanupExpiredLocks();
+            }
         }
 
         await _next(context);
+    }
+
+    private void CleanupExpiredLocks()
+    {
+        var now = DateTime.UtcNow;
+        foreach (var kvp in _ipLocks)
+        {
+            if (kvp.Value.LastUsed.Add(_lockExpiration) < now &&
+                _ipLocks.TryRemove(kvp.Key, out var lockObj))
+            {
+                lockObj.Dispose();
+            }
+        }
     }
 
     private static string GetClientIp(HttpContext context)
@@ -89,6 +110,38 @@ public class RateLimitMiddleware
     {
         Log.Warning("Rate limit exceeded - IP: {ClientIp}, Requests: {RequestCount}, Path: {RequestPath}",
             clientIp, requestCount, context.Request.Path);
+    }
+}
+
+/// <summary>
+/// Async lock implementation for rate limiting coordination.
+/// Properly disposable to prevent memory leaks.
+/// </summary>
+internal sealed class AsyncLock : IDisposable
+{
+    private readonly SemaphoreSlim _semaphore;
+    public DateTime LastUsed { get; private set; }
+
+    public AsyncLock()
+    {
+        _semaphore = new SemaphoreSlim(1, 1);
+        LastUsed = DateTime.UtcNow;
+    }
+
+    public async Task AcquireAsync(CancellationToken cancellationToken)
+    {
+        await _semaphore.WaitAsync(cancellationToken);
+        LastUsed = DateTime.UtcNow;
+    }
+
+    public void Release()
+    {
+        _semaphore.Release();
+    }
+
+    public void Dispose()
+    {
+        _semaphore?.Dispose();
     }
 }
 

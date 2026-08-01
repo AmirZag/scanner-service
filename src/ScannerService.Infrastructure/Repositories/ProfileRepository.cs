@@ -1,5 +1,4 @@
-﻿using System.Linq.Expressions;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
@@ -20,14 +19,14 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
     public async Task<List<ProfileDto>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         Logger.LogDebug("Retrieving all profiles");
-        return await Context.Profiles.Select(MapToDto).ToListAsync(cancellationToken);
+        return await Context.Profiles.Select(p => MapToProfileDto(p)).ToListAsync(cancellationToken);
     }
 
     public new async Task<ProfileDto?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         Logger.LogDebug("Retrieving profile {ProfileId}", id);
         var entity = await Context.Profiles.FindAsync([id], cancellationToken);
-        return entity == null ? null : ToDto(entity);
+        return entity == null ? null : MapToProfileDto(entity);
     }
 
     public async Task<ProfileDto> AddAsync(UpsertProfileDto upsertProfileDto, CancellationToken cancellationToken = default)
@@ -52,7 +51,7 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
         await Context.SaveChangesAsync(cancellationToken);
 
         Logger.LogInformation("Profile added with ID {ProfileId}", entity.Id);
-        return ToDto(entity);
+        return MapToProfileDto(entity);
     }
 
     public async Task<ProfileDto?> UpdateAsync(int id, UpdateProfileDto updateProfileDto, CancellationToken cancellationToken = default)
@@ -80,8 +79,9 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
             Logger.LogInformation("Profile {ProfileId} update requested but no changes to apply", id);
         }
 
-        return ToDto(entity);
+        return MapToProfileDto(entity);
     }
+
     public async Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default)
     {
         Logger.LogInformation("Deleting profile {ProfileId}", id);
@@ -100,27 +100,11 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
         return true;
     }
 
-
-
-    private static ProfileDto ToDto(Profile p) => new(
-        p.Id,
-        p.Name,
-        p.DeviceId,
-        p.PaperSource,
-        p.BitDepth,
-        p.PageSize,
-        p.HorizontalAlign,
-        p.Resolution,
-        p.Scale,
-        p.Brightness,
-        p.Contrast,
-        p.ImageQuality,
-        p.CreatedAt,
-        p.UpdatedAt
-    );
-
-    private static readonly Expression<Func<Profile, ProfileDto>> MapToDto = p => new ProfileDto
-    (
+    /// <summary>
+    /// Maps a Profile entity to ProfileDto.
+    /// Consolidated mapping method used throughout the repository.
+    /// </summary>
+    private static ProfileDto MapToProfileDto(Profile p) => new(
         p.Id,
         p.Name,
         p.DeviceId,

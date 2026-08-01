@@ -3,7 +3,7 @@
 public class ExportSetting
 {
     public int Id { get; set; }
-    public string Format { get; set; } = Common.ApplicationConstants.ExportDefaults.DefaultFormat;
+    public string Format { get; set; } = Common.ScannerConstants.ExportFormat.PDF;
     public string ExportPath { get; set; } = "";
     public string FileName { get; set; } = Common.ApplicationConstants.ExportDefaults.DefaultFileName;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

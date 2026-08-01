@@ -1,9 +1,8 @@
 using Microsoft.Extensions.Logging;
-using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Infrastructure.Persistence;
-using System.Linq;
+using System.IO;
 using System.Text.RegularExpressions;
 
 namespace ScannerService.Infrastructure.Services;
@@ -45,7 +44,9 @@ public partial class RecentScansService : IRecentScansService
         _logger.LogInformation("Getting recent scans - Count: {Count}", count);
 
         // Get export path from database
-        var exportSetting = await _context.ExportSettings.FindAsync([Domain.Common.ApplicationConstants.Database.DefaultExportSettingId], cancellationToken);
+        var exportSetting = await _context.ExportSettings.FindAsync(
+            [Domain.Common.ApplicationConstants.Database.DefaultExportSettingId],
+            cancellationToken);
         var exportPath = exportSetting?.ExportPath;
 
         // Use default if not set
@@ -66,8 +67,8 @@ public partial class RecentScansService : IRecentScansService
             return new RecentScansResponseDto(0, count, []);
         }
 
-        // Recursively find all supported files
-        var files = await FindFilesRecursivelyAsync(exportPath, 0, cancellationToken);
+        // Recursively find all supported files using optimized enumeration
+        var files = await FindFilesOptimizedAsync(exportPath, 0, cancellationToken);
 
         if (files.Count == 0)
         {
@@ -94,17 +95,9 @@ public partial class RecentScansService : IRecentScansService
     }
 
     /// <summary>
-    /// Recursively finds all supported files in the directory tree.
+    /// Optimized file enumeration using EnumerationOptions for better performance.
     /// </summary>
-    /// <remarks>
-    /// Searches for image and PDF files up to MaxDepth levels deep.
-    /// Enforces MaxFiles limit to prevent excessive filesystem scanning.
-    /// </remarks>
-    /// <param name="directory">Directory to scan</param>
-    /// <param name="currentDepth">Current recursion depth (0 for root)</param>
-    /// <param name="cancellationToken">Cancellation token for async operation</param>
-    /// <returns>List of found files with metadata</returns>
-    private async Task<List<ScanFileRecord>> FindFilesRecursivelyAsync(
+    private async Task<List<ScanFileRecord>> FindFilesOptimizedAsync(
         string directory,
         int currentDepth,
         CancellationToken cancellationToken)
@@ -117,90 +110,95 @@ public partial class RecentScansService : IRecentScansService
         }
 
         var files = new List<ScanFileRecord>();
+        var maxFiles = Domain.Common.ApplicationConstants.RecentScans.MaxFiles;
 
-        // Get files from current directory
-        var currentDirFiles = await GetFilesFromDirectorySafeAsync(directory, cancellationToken);
-        files.AddRange(currentDirFiles);
-
-        // Check if we've reached the max file limit
-        if (files.Count >= Domain.Common.ApplicationConstants.RecentScans.MaxFiles)
+        // Use EnumerationOptions for better performance and error handling
+        var enumerationOptions = new EnumerationOptions
         {
-            return files;
-        }
-
-        // Recursively scan subdirectories if not at max depth
-        if (currentDepth < Domain.Common.ApplicationConstants.RecentScans.MaxDepth)
-        {
-            var subdirectories = await GetSubdirectoriesSafeAsync(directory, cancellationToken);
-
-            foreach (var subdirectory in subdirectories)
-            {
-                if (files.Count >= Domain.Common.ApplicationConstants.RecentScans.MaxFiles)
-                {
-                    break;
-                }
-
-                var subFiles = await FindFilesRecursivelyAsync(subdirectory, currentDepth + 1, cancellationToken);
-                files.AddRange(subFiles.Take(Domain.Common.ApplicationConstants.RecentScans.MaxFiles - files.Count));
-            }
-        }
-
-        return files;
-    }
-
-    /// <summary>
-    /// Gets files from a directory safely with error handling.
-    /// </summary>
-    private async Task<List<ScanFileRecord>> GetFilesFromDirectorySafeAsync(string directory, CancellationToken cancellationToken)
-    {
-        var files = new List<ScanFileRecord>();
+            IgnoreInaccessible = true,
+            RecurseSubdirectories = false,
+            ReturnSpecialDirectories = false,
+            AttributesToSkip = FileAttributes.System | FileAttributes.Hidden
+        };
 
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var allFiles = await Task.Run(() =>
+            // Get files from current directory with optimized enumeration
+            var currentDirFiles = await Task.Run(() =>
             {
                 var fileList = new List<string>();
-                var files = Directory.EnumerateFiles(directory, "*.*", SearchOption.TopDirectoryOnly)
-                    .Where(filePath =>
-                    {
-                        var ext = Path.GetExtension(filePath);
-                        return Domain.Common.ApplicationConstants.SupportedExtensions.ScanFiles.Contains(ext, StringComparer.OrdinalIgnoreCase);
-                    });
 
-                foreach (var filePath in files)
+                foreach (var filePath in Directory.EnumerateFiles(directory, "*.*", enumerationOptions))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    fileList.Add(filePath);
+
+                    var ext = Path.GetExtension(filePath);
+                    if (Domain.Common.ApplicationConstants.SupportedExtensions.ScanFiles.Contains(ext, StringComparer.OrdinalIgnoreCase))
+                    {
+                        fileList.Add(filePath);
+                    }
+
+                    // Stop early if we reach the limit
+                    if (fileList.Count >= maxFiles)
+                    {
+                        break;
+                    }
                 }
 
                 return fileList;
             }, cancellationToken);
 
-            foreach (var filePath in allFiles)
+            // Get file info in batch
+            foreach (var filePath in currentDirFiles)
             {
-                if (files.Count >= Domain.Common.ApplicationConstants.RecentScans.MaxFiles)
+                if (files.Count >= maxFiles)
                 {
-                    _logger.LogWarning("Reached maximum file limit ({MaxFiles})", Domain.Common.ApplicationConstants.RecentScans.MaxFiles);
+                    _logger.LogWarning("Reached maximum file limit ({MaxFiles})", maxFiles);
                     break;
                 }
 
-                var fileInfo = new FileInfo(filePath);
-                files.Add(new ScanFileRecord(
-                    fileInfo.Name,
-                    filePath,
-                    fileInfo.Extension,
-                    fileInfo.Length,
-                    fileInfo.CreationTimeUtc
-                ));
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    var fileInfo = new FileInfo(filePath);
+                    files.Add(new ScanFileRecord(
+                        fileInfo.Name,
+                        filePath,
+                        fileInfo.Extension,
+                        fileInfo.Length,
+                        fileInfo.CreationTimeUtc
+                    ));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogDebug(ex, "Cannot access file: {FilePath}", filePath);
+                }
+            }
+
+            // Recursively scan subdirectories if not at max depth
+            if (currentDepth < Domain.Common.ApplicationConstants.RecentScans.MaxDepth && files.Count < maxFiles)
+            {
+                var subdirectories = await GetSubdirectoriesSafeAsync(directory, cancellationToken);
+
+                foreach (var subdirectory in subdirectories)
+                {
+                    if (files.Count >= maxFiles)
+                    {
+                        break;
+                    }
+
+                    var subFiles = await FindFilesOptimizedAsync(subdirectory, currentDepth + 1, cancellationToken);
+                    var remainingSlots = maxFiles - files.Count;
+                    files.AddRange(subFiles.Take(remainingSlots));
+                }
             }
         }
         catch (OperationCanceledException)
         {
-            throw; // Re-throw cancellation exceptions
+            throw;
         }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or DirectoryNotFoundException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogDebug(ex, "Cannot access directory: {Directory}", directory);
         }
@@ -222,22 +220,24 @@ public partial class RecentScansService : IRecentScansService
             cancellationToken.ThrowIfCancellationRequested();
 
             var subdirectories = new List<string>();
+            var enumerationOptions = new EnumerationOptions
+            {
+                IgnoreInaccessible = true,
+                ReturnSpecialDirectories = false,
+                AttributesToSkip = FileAttributes.System | FileAttributes.Hidden
+            };
 
             try
             {
-                foreach (var dir in Directory.EnumerateDirectories(directory))
+                foreach (var dir in Directory.EnumerateDirectories(directory, "*", enumerationOptions))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     subdirectories.Add(dir);
                 }
             }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or DirectoryNotFoundException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 _logger.LogDebug(ex, "Cannot enumerate subdirectories of: {Directory}", directory);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Error enumerating subdirectories of: {Directory}", directory);
             }
 
             return subdirectories;
@@ -247,28 +247,12 @@ public partial class RecentScansService : IRecentScansService
     /// <summary>
     /// Groups files by their scan ID to identify multi-page scans.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Files are grouped by their base name (without page numbering suffix).
-    /// This allows multi-page scans to be displayed as a single group.
-    /// </para>
-    /// <para>
-    /// <strong>Examples:</strong>
-    /// <list type="bullet">
-    /// <item>"scan_001.jpg" → group with 1 file</item>
-    /// <item>"scan_002_1.jpg", "scan_002_2.jpg" → group "scan_002" with 2 files</item>
-    /// </list>
-    /// </para>
-    /// </remarks>
-    /// <param name="files">List of files to group</param>
-    /// <returns>List of scan groups with metadata</returns>
     private List<ScanGroupDto> GroupFilesByScanId(List<ScanFileRecord> files)
     {
         var groups = new Dictionary<string, List<ScanFileRecord>>();
 
         foreach (var file in files)
         {
-            // Extract scan ID (base name without _{number} suffix and extension)
             var scanId = ExtractScanId(file.Filename);
 
             if (!groups.TryGetValue(scanId, out var fileList))
@@ -283,18 +267,14 @@ public partial class RecentScansService : IRecentScansService
 
         foreach (var (scanId, groupFiles) in groups)
         {
-            // Get format from first file's extension
             var format = groupFiles[0].Extension.TrimStart('.').ToLowerInvariant();
-
-            // Find earliest timestamp in the group
             var timestamp = groupFiles.Min(f => f.CreatedAtUtc);
 
-            // Convert to DTOs
             var fileDtos = groupFiles
-                .OrderBy(f => f.Filename) // Sort files by name for consistent ordering
+                .OrderBy(f => f.Filename)
                 .Select(f => new ScanFileDto(
                     f.Filename,
-                    f.FullPath, // Could be converted to relative path if needed
+                    f.FullPath,
                     GetContentType(f.Extension),
                     f.SizeBytes,
                     f.CreatedAtUtc
@@ -316,51 +296,23 @@ public partial class RecentScansService : IRecentScansService
     /// <summary>
     /// Extracts scan ID from filename by removing the page numbering suffix and extension.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Used to group multi-page scans together. Removes trailing _{number} patterns
-    /// that indicate page numbers in multi-page scans.
-    /// </para>
-    /// <para>
-    /// <strong>Examples:</strong>
-    /// <list type="bullet">
-    /// <item>"scan_001.pdf" → "scan_001" (single page)</item>
-    /// <item>"scan_002_1.jpg" → "scan_002" (page 1)</item>
-    /// <item>"scan_002_2.jpg" → "scan_002" (page 2, groups with page 1)</item>
-    /// <item>"document.pdf" → "document" (no page numbering)</item>
-    /// </list>
-    /// </para>
-    /// </remarks>
-    /// <param name="filename">Filename to process (can include extension)</param>
-    /// <returns>Base name without page numbering or extension</returns>
     private static string ExtractScanId(string filename)
     {
-        // Remove extension
         var nameWithoutExt = Path.GetFileNameWithoutExtension(filename);
-
-        // Check for _{number} pattern (e.g., scan_001_1, scan_001_2)
         var match = UnderscoreNumberSuffixRegex().Match(nameWithoutExt);
         if (match.Success)
         {
-            // Return the part before _{number}
             return match.Groups[1].Value;
         }
-
         return nameWithoutExt;
     }
 
     /// <summary>
     /// Gets the MIME content type for a file extension.
     /// </summary>
-    /// <remarks>
-    /// Maps file extensions to their corresponding MIME types for proper
-    /// HTTP content-type headers in the API response.
-    /// </remarks>
-    /// <param name="extension">File extension including the dot (e.g., ".jpg", ".pdf")</param>
-    /// <returns>MIME content type string</returns>
     private static string GetContentType(string extension)
     {
-        return ContentTypes.GetContentType(extension);
+        return Application.Common.ContentTypes.GetContentType(extension);
     }
 
     /// <summary>

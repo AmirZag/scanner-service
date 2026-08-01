@@ -27,7 +27,7 @@ public class Context : DbContext
         modelBuilder.Entity<ExportSetting>().HasData(new ExportSetting
         {
             Id = 1,
-            Format = "PDF",
+            Format = Domain.Common.ScannerConstants.ExportFormat.PDF,
             ExportPath = "",
             FileName = "scan_{datetime}"
         });

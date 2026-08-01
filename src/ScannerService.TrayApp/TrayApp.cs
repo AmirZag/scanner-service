@@ -21,6 +21,10 @@ namespace ScannerService.TrayApp;
 
 public class TrayApp : ApplicationContext
 {
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
     private readonly NotifyIcon _icon;
     private readonly System.Windows.Forms.Timer _statusCheckTimer;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -489,11 +493,18 @@ public class TrayApp : ApplicationContext
         }
 
         // Get the icon handle and clone it to create a properly managed icon
-        // This prevents GDI handle leaks
         var handle = bmp.GetHicon();
-        using var iconFromHandle = Icon.FromHandle(handle);
-        // Clone to create a completely independent icon
-        return (Icon)iconFromHandle.Clone();
+        try
+        {
+            using var iconFromHandle = Icon.FromHandle(handle);
+            // Clone to create a completely independent icon
+            return (Icon)iconFromHandle.Clone();
+        }
+        finally
+        {
+            // Always destroy the original HICON to prevent GDI handle leaks
+            DestroyIcon(handle);
+        }
     }
 
     private void ShowNotification(string message, ToolTipIcon icon)

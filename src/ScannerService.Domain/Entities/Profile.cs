@@ -7,10 +7,10 @@ public class Profile
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? DeviceId { get; set; }
-    public string PaperSource { get; set; } = Common.ApplicationConstants.ProfileDefaults.DefaultPaperSource;
-    public string BitDepth { get; set; } = Common.ApplicationConstants.ProfileDefaults.DefaultBitDepth;
-    public string PageSize { get; set; } = Common.ApplicationConstants.ProfileDefaults.DefaultPageSize;
-    public string HorizontalAlign { get; set; } = Common.ApplicationConstants.ProfileDefaults.DefaultHorizontalAlign;
+    public string PaperSource { get; set; } = Common.ScannerConstants.PaperSource.Glass;
+    public string BitDepth { get; set; } = Common.ScannerConstants.BitDepth.Color;
+    public string PageSize { get; set; } = Common.ScannerConstants.PageSize.A4;
+    public string HorizontalAlign { get; set; } = Common.ScannerConstants.HorizontalAlign.Center;
     public int Resolution { get; set; } = Common.ApplicationConstants.ProfileDefaults.DefaultResolution;
     public string Scale { get; set; } = Common.ApplicationConstants.ProfileDefaults.DefaultScale;
     public int Brightness { get; set; } = Common.ApplicationConstants.ProfileDefaults.DefaultBrightness;

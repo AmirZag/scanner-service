@@ -95,6 +95,9 @@ public class WebApiHostService : IDisposable
             builder.Services.AddDbContext<Context>(options =>
                 options.UseSqlite(string.Format(CultureInfo.InvariantCulture, DataSourceFormat, dbPath)));
 
+            // Scanner services with proper lifetime management
+            builder.Services.AddSingleton<Infrastructure.Services.ScannerInitializer>();
+            builder.Services.AddSingleton<IScannerInitializer>(sp => sp.GetRequiredService<Infrastructure.Services.ScannerInitializer>());
             builder.Services.AddSingleton<Infrastructure.Services.ScannerService>();
             builder.Services.AddSingleton<IScannerQueries>(sp =>
             {
@@ -132,6 +135,7 @@ public class WebApiHostService : IDisposable
 
             _app = builder.Build();
 
+            // Request body size configuration
             _app.Use(async (context, next) =>
             {
                 // For scan requests, we might receive larger payloads
@@ -146,6 +150,9 @@ public class WebApiHostService : IDisposable
                 }
                 await next();
             });
+
+            // Correlation ID middleware for request tracing
+            _app.UseMiddleware<Middleware.CorrelationIdMiddleware>();
 
             using (var scope = _app.Services.CreateScope())
             {
