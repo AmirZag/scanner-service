@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Infrastructure.Persistence;
@@ -284,15 +285,7 @@ public partial class RecentScansService : IRecentScansService
     /// <returns>MIME content type string</returns>
     private static string GetContentType(string extension)
     {
-        return extension.ToLowerInvariant() switch
-        {
-            ".pdf" => "application/pdf",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".png" => "image/png",
-            ".tiff" or ".tif" => "image/tiff",
-            ".bmp" => "image/bmp",
-            _ => "application/octet-stream"
-        };
+        return ContentTypes.GetContentType(extension);
     }
 
     /// <summary>

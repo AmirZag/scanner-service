@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Infrastructure.Persistence;
@@ -26,7 +27,7 @@ public class ScanJobService : IScanJobService
         _logger = logger;
     }
 
-    public async Task<ScanResultDto> StartScanJobAsync(ScanRequestDto req)
+    public async Task<ScanResultDto> StartScanJobAsync(ScanRequestDto req, CancellationToken cancellationToken = default)
     {
         var startTime = DateTime.UtcNow;
         _logger.LogInformation("Scan request received - ProfileId: {ProfileId}, Format: {Format}, ExportPath: {ExportPath}",
@@ -34,7 +35,7 @@ public class ScanJobService : IScanJobService
 
         try
         {
-            var profile = await _context.Profiles.FindAsync(req.ProfileId);
+            var profile = await _context.Profiles.FindAsync([req.ProfileId], cancellationToken);
             if (profile is null)
             {
                 _logger.LogWarning("Profile not found - ProfileId: {ProfileId}", req.ProfileId);
@@ -80,7 +81,7 @@ public class ScanJobService : IScanJobService
             };
 
             _logger.LogInformation("Starting scan job profile '{ProfileName}'", profile.Name);
-            var scanResult = await _scannerService.ExecuteScanAsync(scanJobConfig);
+            var scanResult = await _scannerService.ExecuteScanAsync(scanJobConfig, cancellationToken);
 
             if (!scanResult.Success)
             {
@@ -91,16 +92,15 @@ public class ScanJobService : IScanJobService
 
             var files = scanResult.Files ?? throw new InvalidOperationException("Scan result has no files despite success");
 
-            byte[] fileContent;
+            string filePath;
             string fileName;
             string contentType;
 
             if (files.Count == 1)
             {
-                var filePath = files[0];
-                fileContent = await File.ReadAllBytesAsync(filePath);
+                filePath = files[0];
                 fileName = Path.GetFileName(filePath);
-                contentType = GetContentType(filePath);
+                contentType = ContentTypes.GetContentTypeFromPath(filePath);
             }
             else
             {
@@ -111,17 +111,16 @@ public class ScanJobService : IScanJobService
                     CompressionLevel.Optimal,
                     false);
 
-                fileContent = await File.ReadAllBytesAsync(zipPath);
-                File.Delete(zipPath);
+                filePath = zipPath;
                 fileName = $"scanned_documents_{DateTime.UtcNow:yyyyMMdd_HHmmss}.zip";
-                contentType = "application/zip";
+                contentType = ContentTypes.GetContentType(".zip");
             }
 
             var duration = DateTime.UtcNow - startTime;
-            _logger.LogInformation("Scan completed successfully - ProfileId: {ProfileId}, ProfileName: {ProfileName}, Files: {FileCount}, Duration: {DurationMs}ms, OutputSize: {OutputSizeBytes}",
-                req.ProfileId, profile.Name, files.Count, duration.TotalMilliseconds, fileContent.Length);
+            _logger.LogInformation("Scan completed successfully - ProfileId: {ProfileId}, ProfileName: {ProfileName}, Files: {FileCount}, Duration: {DurationMs}ms, OutputPath: {OutputPath}",
+                req.ProfileId, profile.Name, files.Count, duration.TotalMilliseconds, filePath);
 
-            return new ScanResultDto(true, fileContent, fileName, contentType, null, duration);
+            return new ScanResultDto(true, filePath, fileName, contentType, null, duration);
         }
         catch (Exception ex)
         {
@@ -190,19 +189,5 @@ public class ScanJobService : IScanJobService
         {
             return (false, $"Invalid export path: {ex.Message}");
         }
-    }
-
-    private static string GetContentType(string filePath)
-    {
-        var extension = Path.GetExtension(filePath).ToLowerInvariant();
-        return extension switch
-        {
-            ".pdf" => "application/pdf",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".png" => "image/png",
-            ".tiff" or ".tif" => "image/tiff",
-            ".bmp" => "image/bmp",
-            _ => "application/octet-stream"
-        };
     }
 }

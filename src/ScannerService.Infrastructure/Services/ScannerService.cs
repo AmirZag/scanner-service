@@ -1,5 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using System.Drawing;
+﻿using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -18,31 +17,42 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
     private ScanController? _controller;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly ILogger<ScannerService> _logger;
+    private Task? _initializationTask;
     private bool _initialized;
     private bool _twainWorkerFailed;
-
-    // Cached reflection field info for efficient bitmap extraction
-    private static readonly System.Reflection.FieldInfo? CachedBitmapField = GetBitmapFieldInfo();
 
     public ScannerService(ILogger<ScannerService> logger)
     {
         _logger = logger;
     }
 
-    private async Task InitializeAsync()
+    private Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
     {
         if (_initialized)
         {
-            return;
+            return Task.CompletedTask;
         }
-        await _lock.WaitAsync();
+
+        if (_initializationTask != null)
+        {
+            return _initializationTask;
+        }
+
+        _initializationTask = Task.Run(() => InitializeInternalAsync(cancellationToken), cancellationToken);
+        return _initializationTask;
+    }
+
+    private async Task InitializeInternalAsync(CancellationToken cancellationToken)
+    {
+        await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            if (_initialized)
+            if (_initialized || _initializationTask?.IsCompleted == true)
             {
                 return;
             }
+
             _logger.LogInformation("Initializing scanner context");
 
             ImageContext imageContext = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
@@ -75,11 +85,16 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         }
     }
 
-    public async Task<List<ScannerDto>> GetScannersListAsync()
+    private async Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<List<ScannerDto>> GetScannersListAsync(CancellationToken cancellationToken = default)
     {
         _logger.LogDebug("Retrieving scanner list");
 
-        await InitializeAsync();
+        await InitializeAsync(cancellationToken);
 
         var drivers = GetDrivers();
 
@@ -96,7 +111,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             {
                 if (_controller == null)
                 {
-                    await InitializeAsync();
+                    await InitializeAsync(cancellationToken);
                 }
                 var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
                 var devices = await controller.GetDeviceList(driver);
@@ -156,15 +171,15 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         await Task.CompletedTask;
     }
 
-    public async Task<ScanExecutionResult> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration)
+    public async Task<ScanExecutionResult> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration, CancellationToken cancellationToken = default)
     {
         var scanStartTime = DateTime.UtcNow;
         _logger.LogInformation("Starting scan operation - DeviceId: {DeviceId}, Format: {Format}, Resolution: {Resolution}",
             scanJobConfiguration.DeviceId, scanJobConfiguration.Format, scanJobConfiguration.Resolution);
 
-        await InitializeAsync();
+        await InitializeAsync(cancellationToken);
 
-        var device = await FindDeviceAsync(scanJobConfiguration.DeviceId);
+        var device = await FindDeviceAsync(scanJobConfiguration.DeviceId, cancellationToken);
 
         if (device == null)
         {
@@ -196,10 +211,13 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         {
             if (_controller == null)
             {
-                await InitializeAsync();
+                await InitializeAsync(cancellationToken);
             }
             var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
-            await foreach (var image in controller.Scan(options))
+// NAPS2 Scan method doesn't support cancellation tokens, using CancellationToken.None explicitly
+#pragma warning disable CA2016, S8949
+            await foreach (var image in controller.Scan(options).WithCancellation(CancellationToken.None))
+#pragma warning restore CA2016, S8949
             {
                 images.Add(image);
                 _logger.LogDebug("Captured image {ImageNumber} at {Timestamp}", images.Count, DateTime.UtcNow);
@@ -329,35 +347,16 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 
     /// <summary>
     /// Extracts a Bitmap from a ProcessedImage.
-    /// First attempts to use the cached reflection field info (if available).
-    /// Falls back to temp file approach if reflection fails or is not available.
+    /// Uses temp file approach for reliability.
     /// </summary>
     private static Bitmap GetBitmapFromImage(ProcessedImage image)
     {
-        // Try using cached reflection field info (optimized path)
-        if (CachedBitmapField != null)
-        {
-            try
-            {
-                if (CachedBitmapField.GetValue(image) is Bitmap bitmap)
-                {
-                    // Clone the bitmap to avoid ownership issues
-                    return new Bitmap(bitmap);
-                }
-            }
-            catch
-            {
-                // Reflection failed, fall through to temp file approach
-            }
-        }
-
-        // Fallback: Use temp file approach (reliable but slower)
         return GetBitmapViaTempFile(image);
     }
 
     /// <summary>
     /// Extracts a Bitmap from ProcessedImage by saving to a temporary file.
-    /// This is the reliable fallback method that works regardless of NAPS2 internals.
+    /// This is the reliable method that works regardless of NAPS2 internals.
     /// </summary>
     private static Bitmap GetBitmapViaTempFile(ProcessedImage image)
     {
@@ -366,31 +365,6 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         {
             image.Save(tempPath, ImageFileFormat.Bmp);
             return new Bitmap(tempPath);
-        }
-        catch (Exception ex) when (IsCriticalException(ex))
-        {
-            // Re-throw critical exceptions
-            throw;
-        }
-        catch
-        {
-            // If temp file approach fails, try one more time with a different path
-            var fallbackPath = Path.Combine(Path.GetTempPath(), $"scan_fallback_{Guid.NewGuid()}.bmp");
-            try
-            {
-                image.Save(fallbackPath, ImageFileFormat.Bmp);
-                return new Bitmap(fallbackPath);
-            }
-            finally
-            {
-                // Clean up fallback file
-                if (File.Exists(fallbackPath))
-                {
-                    try { File.Delete(fallbackPath); }
-                    catch { /* Ignore cleanup errors */ }
-                }
-            }
-            throw;
         }
         finally
         {
@@ -403,37 +377,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Safely retrieves the bitmap field info from ProcessedImage type using reflection.
-    /// Returns null if the field cannot be found (e.g., NAPS2 version changed).
-    /// The result is cached to avoid repeated reflection overhead.
-    /// Note: Reflection is used here as an optimization over the temp file fallback.
-    /// The code gracefully handles reflection failures by falling back to temp file approach.
-    /// </summary>
-#pragma warning disable S3011 // Reflection required for NAPS2 interoperability - has safe fallback
-    private static System.Reflection.FieldInfo? GetBitmapFieldInfo()
-    {
-        try
-        {
-            var imageType = typeof(ProcessedImage);
-            var field = imageType.GetField("_bitmap", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            return field;
-        }
-        catch
-        {
-            // If reflection fails (e.g., obfuscated assembly, changed internals), return null
-            // The code will fall back to temp file approach
-            return null;
-        }
-    }
-#pragma warning restore S3011
-
-    private static bool IsCriticalException(Exception ex)
-    {
-        return ex is OutOfMemoryException or AccessViolationException or StackOverflowException;
-    }
-
-    private async Task<ScanDevice?> FindDeviceAsync(string deviceId)
+    private async Task<ScanDevice?> FindDeviceAsync(string deviceId, CancellationToken cancellationToken)
     {
         var drivers = GetDrivers();
 
@@ -449,7 +393,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             {
                 if (_controller == null)
                 {
-                    await InitializeAsync();
+                    await InitializeAsync(cancellationToken);
                 }
                 var controller = _controller ?? throw new InvalidOperationException("Controller not initialized");
                 var devices = await controller.GetDeviceList(driver);

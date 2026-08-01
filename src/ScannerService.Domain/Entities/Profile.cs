@@ -1,4 +1,6 @@
-﻿namespace ScannerService.Domain.Entities;
+﻿using ScannerService.Domain.Common;
+
+namespace ScannerService.Domain.Entities;
 
 public class Profile
 {
@@ -18,86 +20,80 @@ public class Profile
     public DateTime UpdatedAt { get; set; }
 
     /// <summary>
-    /// Updates the profile with the provided values. Only non-null parameters update the entity.
+    /// Updates the profile with the provided values.
     /// </summary>
-    public void Update(
-        string? name = null,
-        string? deviceId = null,
-        string? paperSource = null,
-        string? bitDepth = null,
-        string? pageSize = null,
-        string? horizontalAlign = null,
-        int? resolution = null,
-        string? scale = null,
-        int? brightness = null,
-        int? contrast = null,
-        int? imageQuality = null)
+    public void Update(ProfileUpdateOptions options)
     {
+        if (options == null)
+        {
+            return;
+        }
+
         var hasChanges = false;
 
-        if (name != null)
+        if (options.Name != null)
         {
-            Name = name;
+            Name = options.Name;
             hasChanges = true;
         }
 
-        if (deviceId != null)
+        if (options.DeviceId != null)
         {
-            DeviceId = deviceId;
+            DeviceId = options.DeviceId;
             hasChanges = true;
         }
 
-        if (paperSource != null)
+        if (options.PaperSource != null)
         {
-            PaperSource = paperSource;
+            PaperSource = options.PaperSource;
             hasChanges = true;
         }
 
-        if (bitDepth != null)
+        if (options.BitDepth != null)
         {
-            BitDepth = bitDepth;
+            BitDepth = options.BitDepth;
             hasChanges = true;
         }
 
-        if (pageSize != null)
+        if (options.PageSize != null)
         {
-            PageSize = pageSize;
+            PageSize = options.PageSize;
             hasChanges = true;
         }
 
-        if (horizontalAlign != null)
+        if (options.HorizontalAlign != null)
         {
-            HorizontalAlign = horizontalAlign;
+            HorizontalAlign = options.HorizontalAlign;
             hasChanges = true;
         }
 
-        if (resolution != null)
+        if (options.Resolution.HasValue)
         {
-            Resolution = resolution.Value;
+            Resolution = options.Resolution.Value;
             hasChanges = true;
         }
 
-        if (scale != null)
+        if (options.Scale != null)
         {
-            Scale = scale;
+            Scale = options.Scale;
             hasChanges = true;
         }
 
-        if (brightness != null)
+        if (options.Brightness.HasValue)
         {
-            Brightness = brightness.Value;
+            Brightness = options.Brightness.Value;
             hasChanges = true;
         }
 
-        if (contrast != null)
+        if (options.Contrast.HasValue)
         {
-            Contrast = contrast.Value;
+            Contrast = options.Contrast.Value;
             hasChanges = true;
         }
 
-        if (imageQuality != null)
+        if (options.ImageQuality.HasValue)
         {
-            ImageQuality = imageQuality.Value;
+            ImageQuality = options.ImageQuality.Value;
             hasChanges = true;
         }
 

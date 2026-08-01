@@ -90,15 +90,8 @@ public class WebApiHostService : IDisposable
             });
 
             var dbPath = Path.Combine(AppContext.BaseDirectory, "scanner.db");
-            builder.Services.AddDbContextFactory<Context>(options =>
+            builder.Services.AddDbContext<Context>(options =>
                 options.UseSqlite(string.Format(CultureInfo.InvariantCulture, DataSourceFormat, dbPath)));
-
-            // Register DbContext as scoped using the factory
-            builder.Services.AddScoped<Context>(sp =>
-            {
-                var factory = sp.GetRequiredService<IDbContextFactory<Context>>();
-                return factory.CreateDbContext();
-            });
 
             builder.Services.AddSingleton<Infrastructure.Services.ScannerService>();
             builder.Services.AddSingleton<IScannerQueries>(sp => sp.GetRequiredService<Infrastructure.Services.ScannerService>());
@@ -273,8 +266,8 @@ public class WebApiHostService : IDisposable
             .WithTags("Health")
             .Produces<ApiHealthCheckDto>(StatusCodes.Status200OK);
 
-        app.MapGet("/api/scanners", async (IScannerQueries svc) =>
-            Results.Ok(await svc.GetScannersListAsync()))
+        app.MapGet("/api/scanners", async (IScannerQueries svc, CancellationToken ct) =>
+            Results.Ok(await svc.GetScannersListAsync(ct)))
             .WithName("GetAllScanners")
             .WithTags("Scanners")
             .Produces(StatusCodes.Status200OK);
@@ -349,14 +342,16 @@ public class WebApiHostService : IDisposable
                 return Results.ValidationProblem(validationResult.ToDictionary());
             }
 
-            var result = await svc.StartScanJobAsync(req);
+            var result = await svc.StartScanJobAsync(req, ct);
 
             if (!result.Success)
             {
                 return Results.BadRequest(new { result.ErrorMessage, result.Duration });
             }
 
-            return Results.File(result.FileContent!, result.ContentType!, result.FileName!);
+            // Stream the file directly from disk instead of loading into memory
+            var fileStream = new FileStream(result.FilePath!, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return Results.File(fileStream, result.ContentType!, result.FileName!);
         })
         .WithName("PerformScan")
         .WithTags("Scan")

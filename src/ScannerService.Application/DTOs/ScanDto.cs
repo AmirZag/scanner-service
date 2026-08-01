@@ -8,7 +8,7 @@ public record ScanRequestDto(
 
 public record ScanResultDto(
     bool Success,
-    byte[]? FileContent,
+    string? FilePath,  // Path to the scanned file (or zip for multi-page scans)
     string? FileName,
     string? ContentType,
     string? ErrorMessage,

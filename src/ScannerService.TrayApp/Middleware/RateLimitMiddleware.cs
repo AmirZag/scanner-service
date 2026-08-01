@@ -47,7 +47,8 @@ public class RateLimitMiddleware
             }
 
             // Increment the counter
-            _cache.Set(counterKey, counter.Increment(), counter.GetExpiration(_options.Window));
+            counter.Increment();
+            _cache.Set(counterKey, counter, counter.GetExpiration(_options.Window));
         }
         else
         {
@@ -82,7 +83,7 @@ public class RateLimitMiddleware
 /// </summary>
 internal sealed class RateLimitCounter
 {
-    public int Count { get; }
+    public int Count { get; private set; }
     public DateTime WindowStart { get; }
 
     public RateLimitCounter(int count, DateTime windowStart)
@@ -97,9 +98,9 @@ internal sealed class RateLimitCounter
         return WindowStart.Add(window);
     }
 
-    public RateLimitCounter Increment()
+    public void Increment()
     {
-        return new RateLimitCounter(Count + 1, WindowStart);
+        Count++;
     }
 }
 

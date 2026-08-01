@@ -1,8 +1,10 @@
 ﻿using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
+using ScannerService.Domain.Common;
 using ScannerService.Domain.Entities;
 using ScannerService.Infrastructure.Persistence;
 
@@ -64,19 +66,8 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
         }
 
         var oldUpdatedAt = entity.UpdatedAt;
-        entity.Update(
-            updateProfileDto.Name,
-            updateProfileDto.DeviceId,
-            updateProfileDto.PaperSource,
-            updateProfileDto.BitDepth,
-            updateProfileDto.PageSize,
-            updateProfileDto.HorizontalAlign,
-            updateProfileDto.Resolution,
-            updateProfileDto.Scale,
-            updateProfileDto.Brightness,
-            updateProfileDto.Contrast,
-            updateProfileDto.ImageQuality
-        );
+        var updateOptions = updateProfileDto.ToUpdateOptions();
+        entity.Update(updateOptions);
 
         if (entity.UpdatedAt != oldUpdatedAt)
         {

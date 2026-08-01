@@ -1,8 +1,9 @@
-﻿using ScannerService.Application.DTOs;
+﻿using System.Threading;
+using ScannerService.Application.DTOs;
 
 namespace ScannerService.Application.Interfaces;
 
 public interface IScanJobService
 {
-    Task<ScanResultDto> StartScanJobAsync(ScanRequestDto req);
+    Task<ScanResultDto> StartScanJobAsync(ScanRequestDto req, CancellationToken cancellationToken = default);
 }
