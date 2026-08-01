@@ -1,22 +1,30 @@
-﻿namespace ScannerService.Application.DTOs;
+﻿using ScannerService.Application.Common;
 
-public record ScanRequestDto(
+namespace ScannerService.Application.DTOs;
+
+public sealed record ScanRequestDto(
     int ProfileId,
     string? ExportPath = null,
     string? Format = null
 );
 
-public record ScanResultDto(
+public sealed record ScanResultDto(
     bool Success,
     string? FilePath,  // Path to the scanned file (or zip for multi-page scans)
     string? FileName,
     string? ContentType,
     string? ErrorMessage,
-    TimeSpan Duration
-);
-
-public record ScanExecutionResult(bool Success, List<string>? Files = null, string? ErrorMessage = null)
+    TimeSpan Duration)
 {
-    public static ScanExecutionResult Succeed(List<string> files) => new(true, files, null);
-    public static ScanExecutionResult Fail(string errorMessage) => new(false, null, errorMessage);
+    /// <summary>
+    /// Creates a successful ScanResultDto.
+    /// </summary>
+    public static ScanResultDto Successful(string filePath, string fileName, string contentType, TimeSpan duration) =>
+        new(true, filePath, fileName, contentType, null, duration);
+
+    /// <summary>
+    /// Creates a failed ScanResultDto.
+    /// </summary>
+    public static ScanResultDto Failed(string errorMessage, TimeSpan duration) =>
+        new(false, null, null, null, errorMessage, duration);
 }

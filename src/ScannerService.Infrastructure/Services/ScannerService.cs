@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using NAPS2.Images;
 using NAPS2.Pdf;
 using NAPS2.Scan;
+using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Domain.Common;
@@ -68,7 +69,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         return scanners;
     }
 
-    public async Task<ScanExecutionResult> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration, CancellationToken cancellationToken = default)
+    public async Task<Result<List<string>>> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration, CancellationToken cancellationToken = default)
     {
         var scanStartTime = DateTime.UtcNow;
         _logger.LogInformation("Starting scan operation - DeviceId: {DeviceId}, Format: {Format}, Resolution: {Resolution}",
@@ -83,7 +84,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         if (device == null)
         {
             _logger.LogError("Scanner device not found - DeviceId: {DeviceId}", scanJobConfiguration.DeviceId);
-            return ScanExecutionResult.Fail($"Scanner not found: {scanJobConfiguration.DeviceId}");
+            return Result<List<string>>.Failure($"Scanner not found: {scanJobConfiguration.DeviceId}");
         }
 
         var options = new NAPS2.Scan.ScanOptions
@@ -120,14 +121,14 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
                 img.Dispose();
             }
 
-            return ScanExecutionResult.Fail($"Scan operation failed: {ex.Message}");
+            return Result<List<string>>.Failure($"Scan operation failed: {ex.Message}");
         }
 
         if (images.Count == 0)
         {
             var duration = DateTime.UtcNow - scanStartTime;
             _logger.LogWarning("No images were scanned - Duration: {DurationMs}ms", duration.TotalMilliseconds);
-            return ScanExecutionResult.Fail("No images were scanned. Please ensure the document is properly placed in the scanner and try again.");
+            return Result<List<string>>.Failure("No images were scanned. Please ensure the document is properly placed in the scanner and try again.");
         }
 
         _logger.LogInformation("Scanned {ImageCount} images, saving as {Format}", images.Count, scanJobConfiguration.Format);
@@ -141,7 +142,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         {
             var duration = DateTime.UtcNow - scanStartTime;
             _logger.LogError(ex, "Failed to save scanned images - Duration: {DurationMs}ms", duration.TotalMilliseconds);
-            return ScanExecutionResult.Fail($"Failed to save scanned images: {ex.Message}");
+            return Result<List<string>>.Failure($"Failed to save scanned images: {ex.Message}");
         }
         finally
         {
@@ -155,7 +156,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         var totalDuration = DateTime.UtcNow - scanStartTime;
         _logger.LogInformation("Scan completed successfully - Images: {ImageCount}, Files: {FileCount}, Duration: {DurationMs}ms, OutputPath: {OutputPath}",
             images.Count, files.Count, totalDuration.TotalMilliseconds, scanJobConfiguration.ExportPath);
-        return ScanExecutionResult.Succeed(files);
+        return Result<List<string>>.Success(files);
     }
 
     public async ValueTask DisposeAsync()

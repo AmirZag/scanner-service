@@ -88,8 +88,9 @@ public class ScanJobService : IScanJobService
     /// <summary>
     /// Cleans up a specific temporary file immediately.
     /// Intended to be called after the file has been sent to the client.
+    /// Returns Result indicating success or failure.
     /// </summary>
-    public void CleanupTempFile(string filePath)
+    public Result CleanupTempFile(string filePath)
     {
         if (_tempFilesToDelete.Remove(filePath))
         {
@@ -97,15 +98,18 @@ public class ScanJobService : IScanJobService
             {
                 File.Delete(filePath);
                 _logger.LogDebug("Cleaned up temporary file: {FilePath}", filePath);
+                return Result.Success();
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to clean up temporary file: {FilePath}", filePath);
+                return Result.Failure($"Failed to clean up temporary file: {ex.Message}");
             }
         }
+        return Result.Failure("File not found in temp files tracking");
     }
 
-    public async Task<ScanResultDto> StartScanJobAsync(ScanRequestDto req, CancellationToken cancellationToken = default)
+    public async Task<Result<ScanResultDto>> StartScanJobAsync(ScanRequestDto req, CancellationToken cancellationToken = default)
     {
         var startTime = DateTime.UtcNow;
         _logger.LogInformation("Scan request received - ProfileId: {ProfileId}, Format: {Format}, ExportPath: {ExportPath}",
@@ -117,17 +121,24 @@ public class ScanJobService : IScanJobService
             if (profile is null)
             {
                 _logger.LogWarning("Profile not found - ProfileId: {ProfileId}", req.ProfileId);
-                throw new InvalidOperationException($"Profile {req.ProfileId} not found");
+                return Result<ScanResultDto>.Failure($"Profile {req.ProfileId} not found");
             }
 
             if (string.IsNullOrEmpty(profile.DeviceId))
             {
                 _logger.LogWarning("Profile has no device assigned - ProfileId: {ProfileId}, ProfileName: {ProfileName}",
                     req.ProfileId, profile.Name);
-                throw new InvalidOperationException("Profile does not have a scanner device assigned");
+                return Result<ScanResultDto>.Failure("Profile does not have a scanner device assigned");
             }
 
-            var exportSetting = await _exportSettingRepository.GetExportSettingAsync(cancellationToken);
+            var exportSettingResult = await _exportSettingRepository.GetExportSettingAsync(cancellationToken);
+            if (exportSettingResult.IsFailure)
+            {
+                _logger.LogWarning("Failed to retrieve export settings: {ErrorMessage}", exportSettingResult.Error);
+                return Result<ScanResultDto>.Failure($"Failed to retrieve export settings: {exportSettingResult.Error}");
+            }
+
+            var exportSetting = exportSettingResult.Value!;
             var exportPath = req.ExportPath ?? exportSetting.ExportPath;
 
             if (string.IsNullOrWhiteSpace(exportPath))
@@ -139,9 +150,8 @@ public class ScanJobService : IScanJobService
             var validationResult = ValidateAndEnsureExportPath(exportPath);
             if (!validationResult.IsValid)
             {
-                var errorDuration = DateTime.UtcNow - startTime;
                 _logger.LogWarning("Export path validation failed: {ErrorMessage}", validationResult.ErrorMessage);
-                return new ScanResultDto(false, null, null, null, validationResult.ErrorMessage, errorDuration);
+                return Result<ScanResultDto>.Failure(validationResult.ErrorMessage ?? "Export path validation failed");
             }
 
             var scanJobConfig = new ScanJobConfiguration
@@ -161,14 +171,13 @@ public class ScanJobService : IScanJobService
             _logger.LogInformation("Starting scan job profile '{ProfileName}'", profile.Name);
             var scanResult = await _scannerService.ExecuteScanAsync(scanJobConfig, cancellationToken);
 
-            if (!scanResult.Success)
+            if (scanResult.IsFailure)
             {
-                var errorDuration = DateTime.UtcNow - startTime;
-                _logger.LogWarning("Scan operation failed: {ErrorMessage}", scanResult.ErrorMessage);
-                return new ScanResultDto(false, null, null, null, scanResult.ErrorMessage, errorDuration);
+                _logger.LogWarning("Scan operation failed: {ErrorMessage}", scanResult.Error);
+                return Result<ScanResultDto>.Failure(scanResult.Error ?? "Scan operation failed");
             }
 
-            var files = scanResult.Files ?? throw new InvalidOperationException("Scan result has no files despite success");
+            var files = scanResult.Value ?? throw new InvalidOperationException("Scan result has no files despite success");
 
             string filePath;
             string fileName;
@@ -204,13 +213,13 @@ public class ScanJobService : IScanJobService
             _logger.LogInformation("Scan completed successfully - ProfileId: {ProfileId}, ProfileName: {ProfileName}, Files: {FileCount}, Duration: {DurationMs}ms, OutputPath: {OutputPath}",
                 req.ProfileId, profile.Name, files.Count, duration.TotalMilliseconds, filePath);
 
-            return new ScanResultDto(true, filePath, fileName, contentType, null, duration);
+            return Result<ScanResultDto>.Success(ScanResultDto.Successful(filePath, fileName, contentType, duration));
         }
         catch (Exception ex)
         {
             var errorDuration = DateTime.UtcNow - startTime;
             _logger.LogError(ex, "Scan failed after {Duration}ms: {Message}", errorDuration.TotalMilliseconds, ex.Message);
-            return new ScanResultDto(false, null, null, null, ex.Message, errorDuration);
+            return Result<ScanResultDto>.Failure(ex.Message);
         }
     }
 

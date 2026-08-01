@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Domain.Entities;
@@ -16,30 +17,47 @@ public class ExportSettingRepository : RepositoryBase<ExportSetting>, IExportSet
     {
     }
 
-    public async Task<ExportSettingDto> GetExportSettingAsync(CancellationToken cancellationToken = default)
+    public async Task<Result<ExportSettingDto>> GetExportSettingAsync(CancellationToken cancellationToken = default)
     {
         Logger.LogDebug("Retrieving export settings");
-        var entity = await GetExportSettingEntityAsync(cancellationToken);
-        return new ExportSettingDto(entity.Format, entity.ExportPath, entity.FileName);
+        try
+        {
+            var entity = await GetExportSettingEntityAsync(cancellationToken);
+            return Result<ExportSettingDto>.Success(new ExportSettingDto(entity.Format, entity.ExportPath, entity.FileName));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to retrieve export settings");
+            return Result<ExportSettingDto>.Failure($"Failed to retrieve export settings: {ex.Message}");
+        }
     }
 
-    public async Task UpdateExportSettingAsync(ExportSettingDto exportSettingDto, CancellationToken cancellationToken = default)
+    public async Task<Result> UpdateExportSettingAsync(ExportSettingDto exportSettingDto, CancellationToken cancellationToken = default)
     {
         Logger.LogInformation("Updating export settings");
-        var entity = await GetExportSettingEntityAsync(cancellationToken);
+        try
+        {
+            var entity = await GetExportSettingEntityAsync(cancellationToken);
 
-        entity.Update(
-            exportSettingDto.Format,
-            exportSettingDto.ExportPath,
-            exportSettingDto.FileName
-        );
+            entity.Update(
+                exportSettingDto.Format,
+                exportSettingDto.ExportPath,
+                exportSettingDto.FileName
+            );
 
-        await Context.SaveChangesAsync(cancellationToken);
+            await Context.SaveChangesAsync(cancellationToken);
 
-        Logger.LogInformation("Export settings updated successfully");
+            Logger.LogInformation("Export settings updated successfully");
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update export settings");
+            return Result.Failure($"Failed to update export settings: {ex.Message}");
+        }
     }
 
-    public async Task<ExportSetting> GetExportSettingEntityAsync(CancellationToken cancellationToken = default)
+    private async Task<ExportSetting> GetExportSettingEntityAsync(CancellationToken cancellationToken = default)
     {
         var entity = await Context.ExportSettings.FirstOrDefaultAsync(cancellationToken);
 

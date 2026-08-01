@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Application.Validators;
@@ -115,8 +116,10 @@ public static class EndpointConfigurationExtensions
 
         app.MapGet("/api/profiles/{id}", async (int id, IProfileRepository svc) =>
         {
-            var p = await svc.GetByIdAsync(id);
-            return p == null ? Results.NotFound() : Results.Ok(p);
+            var result = await svc.GetByIdAsync(id);
+            return result == null
+                ? Results.NotFound(new { error = $"Profile {id} not found" })
+                : Results.Ok(result);
         })
         .WithName("GetProfileById")
         .WithTags("Profiles")
@@ -148,8 +151,10 @@ public static class EndpointConfigurationExtensions
                 return Results.ValidationProblem(validationResult.ToDictionary());
             }
 
-            var p = await svc.UpdateAsync(id, req, ct);
-            return p == null ? Results.NotFound() : Results.Ok(p);
+            var result = await svc.UpdateAsync(id, req, ct);
+            return result.IsFailure
+                ? Results.NotFound(new { error = result.Error })
+                : Results.Ok(result.Value);
         })
         .WithName("UpdateProfile")
         .WithTags("Profiles")
@@ -160,8 +165,10 @@ public static class EndpointConfigurationExtensions
 
         app.MapDelete("/api/profiles/{id}", async (int id, IProfileRepository svc) =>
         {
-            var deleted = await svc.DeleteAsync(id);
-            return deleted ? Results.NoContent() : Results.NotFound();
+            var result = await svc.DeleteAsync(id);
+            return result.IsFailure
+                ? Results.NotFound(new { error = result.Error })
+                : Results.NoContent();
         })
         .WithName("DeleteProfile")
         .WithTags("Profiles")
@@ -184,13 +191,14 @@ public static class EndpointConfigurationExtensions
 
             var result = await svc.StartScanJobAsync(req, ct);
 
-            if (!result.Success)
+            if (result.IsFailure)
             {
-                return Results.BadRequest(new { result.ErrorMessage, result.Duration });
+                return Results.BadRequest(new { error = result.Error });
             }
 
+            var scanResult = result.Value!;
             // Stream the file directly from disk using the path overload for proper disposal
-            return Results.File(result.FilePath!, result.ContentType!, result.FileName!);
+            return Results.File(scanResult.FilePath!, scanResult.ContentType!, scanResult.FileName!);
         })
         .WithName("PerformScan")
         .WithTags("Scan")
@@ -209,10 +217,16 @@ public static class EndpointConfigurationExtensions
     public static void ConfigureExportSettingsEndpoints(this WebApplication app)
     {
         app.MapGet("/api/export-settings", async (IExportSettingRepository svc) =>
-            Results.Ok(await svc.GetExportSettingAsync()))
-            .WithName("GetExportSettings")
-            .WithTags("Export Settings")
-            .Produces(StatusCodes.Status200OK);
+        {
+            var result = await svc.GetExportSettingAsync();
+            return result.IsFailure
+                ? Results.BadRequest(new { error = result.Error })
+                : Results.Ok(result.Value);
+        })
+        .WithName("GetExportSettings")
+        .WithTags("Export Settings")
+        .Produces(StatusCodes.Status200OK)
+        .Produces(StatusCodes.Status400BadRequest);
 
         app.MapPut("/api/export-settings", async (ExportSettingDto dto, IExportSettingRepository svc, IValidator<ExportSettingDto> validator, CancellationToken ct) =>
         {
@@ -222,12 +236,15 @@ public static class EndpointConfigurationExtensions
                 return Results.ValidationProblem(validationResult.ToDictionary());
             }
 
-            await svc.UpdateExportSettingAsync(dto, ct);
-            return Results.Ok();
+            var result = await svc.UpdateExportSettingAsync(dto, ct);
+            return result.IsFailure
+                ? Results.BadRequest(new { error = result.Error })
+                : Results.Ok(result);
         })
         .WithName("UpdateExportSettings")
         .WithTags("Export Settings")
         .Produces(StatusCodes.Status200OK)
+        .Produces(StatusCodes.Status400BadRequest)
         .ProducesValidationProblem()
         .Accepts<ExportSettingDto>("application/json");
     }

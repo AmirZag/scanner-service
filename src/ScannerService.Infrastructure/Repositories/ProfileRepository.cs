@@ -54,7 +54,7 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
         return MapToProfileDto(entity);
     }
 
-    public async Task<ProfileDto?> UpdateAsync(int id, UpdateProfileDto updateProfileDto, CancellationToken cancellationToken = default)
+    public async Task<Result<ProfileDto>> UpdateAsync(int id, UpdateProfileDto updateProfileDto, CancellationToken cancellationToken = default)
     {
         Logger.LogInformation("Updating Profile {ProfileId} with partial update", id);
 
@@ -62,27 +62,19 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
         if (entity is null)
         {
             Logger.LogWarning("Profile {ProfileId} not found for update", id);
-            return null;
+            return Result<ProfileDto>.Failure($"Profile {id} not found");
         }
 
-        var oldUpdatedAt = entity.UpdatedAt;
         var updateOptions = updateProfileDto.ToUpdateOptions();
         entity.Update(updateOptions);
 
-        if (entity.UpdatedAt != oldUpdatedAt)
-        {
-            await Context.SaveChangesAsync(cancellationToken);
-            Logger.LogInformation("Profile {ProfileId} updated successfully", id);
-        }
-        else
-        {
-            Logger.LogInformation("Profile {ProfileId} update requested but no changes to apply", id);
-        }
+        await Context.SaveChangesAsync(cancellationToken);
+        Logger.LogInformation("Profile {ProfileId} updated successfully", id);
 
-        return MapToProfileDto(entity);
+        return Result<ProfileDto>.Success(MapToProfileDto(entity));
     }
 
-    public async Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default)
+    public async Task<Result> DeleteAsync(int id, CancellationToken cancellationToken = default)
     {
         Logger.LogInformation("Deleting profile {ProfileId}", id);
 
@@ -90,14 +82,14 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
         if (entity is null)
         {
             Logger.LogWarning("Profile {ProfileId} not found for deletion", id);
-            return false;
+            return Result.Failure($"Profile {id} not found");
         }
 
         Context.Profiles.Remove(entity);
         await Context.SaveChangesAsync(cancellationToken);
 
         Logger.LogInformation("Profile {ProfileId} deleted successfully", id);
-        return true;
+        return Result.Success();
     }
 
     /// <summary>
