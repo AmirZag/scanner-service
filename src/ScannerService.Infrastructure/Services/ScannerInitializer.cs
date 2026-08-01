@@ -28,8 +28,9 @@ public sealed class ScannerInitializer : IScannerInitializer, IScannerInitialize
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly ILogger<ScannerInitializer> _logger;
     private Task? _initializationTask;
+    private volatile bool _isInitialized;
 
-    public bool IsInitialized { get; private set; }
+    public bool IsInitialized => _isInitialized;
     public bool TwainWorkerFailed { get; private set; }
     ScanningContext IScannerInitializerContext.Context => _context ?? throw new InvalidOperationException("Scanner context not initialized");
     ScanController IScannerInitializerContext.Controller => _controller ?? throw new InvalidOperationException("Scan controller not initialized");
@@ -48,7 +49,7 @@ public sealed class ScannerInitializer : IScannerInitializer, IScannerInitialize
     private Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
     {
         // Fast path for already initialized case (no lock needed for reading)
-        if (IsInitialized)
+        if (_isInitialized)
         {
             return Task.CompletedTask;
         }
@@ -72,7 +73,7 @@ public sealed class ScannerInitializer : IScannerInitializer, IScannerInitialize
         try
         {
             // Double-check after acquiring lock
-            if (IsInitialized)
+            if (_isInitialized)
             {
                 return;
             }
@@ -92,7 +93,7 @@ public sealed class ScannerInitializer : IScannerInitializer, IScannerInitialize
         // Note: This method is called while holding the lock
         // No additional locking needed here
 
-        if (IsInitialized)
+        if (_isInitialized)
         {
             return;
         }
@@ -122,13 +123,13 @@ public sealed class ScannerInitializer : IScannerInitializer, IScannerInitialize
             }
 
             _controller = new ScanController(_context);
-            IsInitialized = true;
+            _isInitialized = true;
             _logger.LogInformation("Scanner initialization complete");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Scanner initialization failed");
-            IsInitialized = false;
+            _isInitialized = false;
             throw;
         }
     }

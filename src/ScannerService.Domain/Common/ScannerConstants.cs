@@ -11,8 +11,6 @@ public static class ScannerConstants
     {
         public const string Feeder = "Feeder";
         public const string Glass = "Glass";
-        public const string Auto = "Auto";
-        public const string Duplex = "Duplex";
     }
 
     /// <summary>Scanner bit depth settings</summary>
@@ -28,20 +26,18 @@ public static class ScannerConstants
     {
         public const string PDF = "PDF";
         public const string JPEG = "JPEG";
-        public const string JPG = "JPG";
         public const string PNG = "PNG";
         public const string TIFF = "TIFF";
         public const string MultiPageTIFF = "MultiPageTIFF";
-        public const string BMP = "BMP";
     }
 
     /// <summary>Page size options</summary>
     public static class PageSize
     {
         public const string A4 = "A4";
+        public const string A5 = "A5";
         public const string Letter = "Letter";
         public const string Legal = "Legal";
-        public const string A3 = "A3";
     }
 
     /// <summary>Horizontal alignment options</summary>
@@ -57,7 +53,8 @@ public static class ScannerConstants
     {
         public const string OneToOne = "1:1";
         public const string HalfSize = "1:2";
-        public const string DoubleSize = "2:1";
+        public const string QuarterSize = "1:4";
+        public const string EighthSize = "1:8";
     }
 
     /// <summary>Scanner driver names</summary>

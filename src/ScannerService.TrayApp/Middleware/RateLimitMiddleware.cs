@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Threading;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Primitives;
@@ -21,6 +22,7 @@ public class RateLimitMiddleware
     private readonly IMemoryCache _cache;
     private readonly ConcurrentDictionary<string, AsyncLock> _ipLocks;
     private readonly TimeSpan _lockExpiration;
+    private long _totalRequestCount;
 
     public RateLimitMiddleware(RequestDelegate next, RateLimitOptions options, IMemoryCache cache)
     {
@@ -29,6 +31,7 @@ public class RateLimitMiddleware
         _cache = cache;
         _ipLocks = new ConcurrentDictionary<string, AsyncLock>();
         _lockExpiration = TimeSpan.FromMinutes(_options.Window.TotalMinutes * 2);
+        _totalRequestCount = 0;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -72,7 +75,8 @@ public class RateLimitMiddleware
             ipLock.Release();
 
             // Clean up expired locks periodically (every 100 requests to avoid overhead)
-            if (counterKey.GetHashCode() % 100 == 0)
+            Interlocked.Increment(ref _totalRequestCount);
+            if (_totalRequestCount % 100 == 0)
             {
                 CleanupExpiredLocks();
             }

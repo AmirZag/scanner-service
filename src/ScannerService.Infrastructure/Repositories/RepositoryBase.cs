@@ -26,7 +26,7 @@ public abstract class RepositoryBase<T> where T : class
     /// </summary>
     protected async Task<bool> EntityExistsAsync(int id)
     {
-        return await Context.Set<T>().FindAsync(id) != null;
+        return await Context.Set<T>().FindAsync(id) is not null;
     }
 
     /// <summary>

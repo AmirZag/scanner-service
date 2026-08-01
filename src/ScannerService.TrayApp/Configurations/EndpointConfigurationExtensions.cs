@@ -189,9 +189,8 @@ public static class EndpointConfigurationExtensions
                 return Results.BadRequest(new { result.ErrorMessage, result.Duration });
             }
 
-            // Stream the file directly from disk instead of loading into memory
-            var fileStream = new FileStream(result.FilePath!, FileMode.Open, FileAccess.Read, FileShare.Read);
-            return Results.File(fileStream, result.ContentType!, result.FileName!);
+            // Stream the file directly from disk using the path overload for proper disposal
+            return Results.File(result.FilePath!, result.ContentType!, result.FileName!);
         })
         .WithName("PerformScan")
         .WithTags("Scan")

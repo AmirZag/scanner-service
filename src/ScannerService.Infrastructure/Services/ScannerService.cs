@@ -9,6 +9,7 @@ using NAPS2.Scan;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Domain.Common;
+using System.Collections.Concurrent;
 
 namespace ScannerService.Infrastructure.Services;
 
@@ -16,6 +17,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 {
     private readonly IScannerInitializer _initializer;
     private readonly ILogger<ScannerService> _logger;
+    private readonly ConcurrentBag<string> _tempBitmapFiles = new();
 
     public ScannerService(IScannerInitializer initializer, ILogger<ScannerService> _logger)
     {
@@ -160,6 +162,24 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
     {
         _logger.LogInformation("Disposing scanner provider");
 
+        // Clean up temporary bitmap files
+        foreach (var tempFile in _tempBitmapFiles)
+        {
+            try
+            {
+                if (File.Exists(tempFile))
+                {
+                    File.Delete(tempFile);
+                    _logger.LogDebug("Cleaned up temp bitmap file: {TempFile}", tempFile);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to delete temp bitmap file: {TempFile}", tempFile);
+            }
+        }
+        _tempBitmapFiles.Clear();
+
         if (_initializer is IAsyncDisposable asyncDisposable)
         {
             await asyncDisposable.DisposeAsync();
@@ -262,28 +282,17 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             ?? throw new InvalidOperationException("TIFF encoder not found");
     }
 
-    private static Bitmap GetBitmapFromImage(ProcessedImage image)
+    private Bitmap GetBitmapFromImage(ProcessedImage image)
     {
         return GetBitmapViaTempFile(image);
     }
 
-    private static Bitmap GetBitmapViaTempFile(ProcessedImage image)
+    private Bitmap GetBitmapViaTempFile(ProcessedImage image)
     {
         var tempPath = Path.Combine(Path.GetTempPath(), $"scan_{Guid.NewGuid()}.bmp");
-        try
-        {
-            image.Save(tempPath, ImageFileFormat.Bmp);
-            return new Bitmap(tempPath);
-        }
-        finally
-        {
-            // Clean up temp file
-            if (File.Exists(tempPath))
-            {
-                try { File.Delete(tempPath); }
-                catch { /* Ignore cleanup errors */ }
-            }
-        }
+        image.Save(tempPath, ImageFileFormat.Bmp);
+        _tempBitmapFiles.Add(tempPath);
+        return new Bitmap(tempPath);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Code", "IDE0060:Remove unused parameter", Justification = "CancellationToken kept for interface consistency")]

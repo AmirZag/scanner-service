@@ -5,6 +5,7 @@ using ScannerService.Application.Interfaces;
 using ScannerService.Infrastructure.Persistence;
 using System.IO.Compression;
 using System.Security;
+using System.Runtime.InteropServices;
 
 namespace ScannerService.Infrastructure.Services;
 
@@ -14,6 +15,7 @@ public class ScanJobService : IScanJobService
     private readonly IScannerService _scannerService;
     private readonly IExportSettingRepository _exportSettingRepository;
     private readonly ILogger<ScanJobService> _logger;
+    private readonly HashSet<string> _tempFilesToDelete = new();
 
     public ScanJobService(
         Context context,
@@ -25,6 +27,82 @@ public class ScanJobService : IScanJobService
         _scannerService = scannerService;
         _exportSettingRepository = exportSettingRepository;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Cleans up old temporary files that were created for multi-page scans.
+    /// Should be called periodically (e.g., on application shutdown or via a timer).
+    /// </summary>
+    public void CleanupOldTempFiles(TimeSpan maxAge)
+    {
+        lock (_tempFilesToDelete)
+        {
+            var now = DateTime.UtcNow;
+            var filesToDelete = new List<string>();
+
+            foreach (var filePath in _tempFilesToDelete)
+            {
+                try
+                {
+                    if (File.Exists(filePath))
+                    {
+                        var fileInfo = new FileInfo(filePath);
+                        if (now - fileInfo.CreationTimeUtc > maxAge)
+                        {
+                            filesToDelete.Add(filePath);
+                        }
+                    }
+                    else
+                    {
+                        // File doesn't exist, remove from tracking
+                        filesToDelete.Add(filePath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error checking temp file: {FilePath}", filePath);
+                    filesToDelete.Add(filePath);
+                }
+            }
+
+            // Delete the files and remove from tracking
+            foreach (var filePath in filesToDelete)
+            {
+                try
+                {
+                    if (File.Exists(filePath))
+                    {
+                        File.Delete(filePath);
+                        _logger.LogDebug("Cleaned up old temporary file: {FilePath}", filePath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete temp file: {FilePath}", filePath);
+                }
+                _tempFilesToDelete.Remove(filePath);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Cleans up a specific temporary file immediately.
+    /// Intended to be called after the file has been sent to the client.
+    /// </summary>
+    public void CleanupTempFile(string filePath)
+    {
+        if (_tempFilesToDelete.Remove(filePath))
+        {
+            try
+            {
+                File.Delete(filePath);
+                _logger.LogDebug("Cleaned up temporary file: {FilePath}", filePath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to clean up temporary file: {FilePath}", filePath);
+            }
+        }
     }
 
     public async Task<ScanResultDto> StartScanJobAsync(ScanRequestDto req, CancellationToken cancellationToken = default)
@@ -110,6 +188,12 @@ public class ScanJobService : IScanJobService
                     zipPath,
                     CompressionLevel.Optimal,
                     false);
+
+                // Track for cleanup
+                lock (_tempFilesToDelete)
+                {
+                    _tempFilesToDelete.Add(zipPath);
+                }
 
                 filePath = zipPath;
                 fileName = $"scanned_documents_{DateTime.UtcNow:yyyyMMdd_HHmmss}.zip";

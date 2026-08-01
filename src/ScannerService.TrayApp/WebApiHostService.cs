@@ -250,6 +250,14 @@ public class WebApiHostService : IDisposable
                 await _runTask.ConfigureAwait(false);
             }
 
+            // Clean up temporary files before disposing the app
+            if (_app != null)
+            {
+                using var scope = _app.Services.CreateScope();
+                var scanJobService = scope.ServiceProvider.GetService<IScanJobService>() as ScanJobService;
+                scanJobService?.CleanupOldTempFiles(TimeSpan.Zero);
+            }
+
             if (_app != null)
             {
                 await _app.DisposeAsync();
