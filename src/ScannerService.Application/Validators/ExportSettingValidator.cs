@@ -9,31 +9,24 @@ public class ExportSettingValidator : AbstractValidator<ExportSettingDto>
     public ExportSettingValidator()
     {
         RuleFor(x => x.Format)
-            .Must(AllowedFormats.Contains)
-            .WithMessage("Format must be one of: PDF, JPEG, PNG, TIFF, MultiPageTIFF")
-            .When(x => !string.IsNullOrWhiteSpace(x.Format));
+            .Must(format => !string.IsNullOrWhiteSpace(format))
+            .WithMessage("Format is required")
+            .Must(format => AllowedFormats.Contains(format))
+            .WithMessage("Format must be one of: PDF, JPEG, PNG, TIFF, MultiPageTIFF");
 
         RuleFor(x => x.FileName)
-            .NotEmpty()
-            .WithMessage("FileName is Required")
-            .When(x => !string.IsNullOrWhiteSpace(x.FileName))
-            .Must(fileName =>
-            {
-                if (string.IsNullOrWhiteSpace(fileName))
-                {
-                    return true;
-                }
-                // Check for invalid path characters
-                return fileName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
-            })
+            .Must(fileName => !string.IsNullOrWhiteSpace(fileName))
+            .WithMessage("FileName is required")
+            .Must(fileName => fileName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0)
             .WithMessage("FileName contains invalid characters");
 
         RuleFor(x => x.ExportPath)
             .Must(path =>
             {
+                // Empty is ok, will use default path
                 if (string.IsNullOrWhiteSpace(path))
                 {
-                    return true; // Empty is ok, will use default
+                    return true;
                 }
 
                 // Check for invalid path characters
@@ -50,8 +43,7 @@ public class ExportSettingValidator : AbstractValidator<ExportSettingDto>
 
                 return true;
             })
-            .WithMessage("ExportPath must be a valid absolute path")
-            .When(x => !string.IsNullOrWhiteSpace(x.ExportPath));
+            .WithMessage("ExportPath must be a valid absolute path or empty");
     }
 
     private static readonly HashSet<string> AllowedFormats = new(StringComparer.OrdinalIgnoreCase) { "PDF", "JPEG", "PNG", "TIFF", "MultiPageTIFF" };
