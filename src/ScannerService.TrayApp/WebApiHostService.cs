@@ -128,7 +128,7 @@ public class WebApiHostService : IDisposable
 
             builder.Services.AddCors(options =>
                 options.AddDefaultPolicy(p =>
-                    p.SetIsOriginAllowed(OriginChecker.IsLocalOrigin)
+                    p.SetIsOriginAllowed(_ => true)
                         .AllowAnyMethod()
                         .AllowAnyHeader()
                         .AllowCredentials()));
