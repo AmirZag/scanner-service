@@ -65,4 +65,35 @@ public static class ScannerConstants
         public const string Escl = "Escl";
         public const string Sane = "Sane";
     }
+
+    /// <summary>Default timeouts for scanner operations (see <see cref="ScannerTimeouts"/>).</summary>
+    public static class Timeouts
+    {
+        /// <summary>Per-driver device enumeration budget (WIA/TWAIN).</summary>
+        public const int DefaultDriverTimeoutMs = 15000;
+
+        /// <summary>ESCL mDNS search window; must stay below the ESCL driver budget.</summary>
+        public const int DefaultEsclSearchTimeoutMs = 4000;
+
+        /// <summary>Margin added on top of the ESCL search timeout.</summary>
+        public const int EsclSearchMarginMs = 2000;
+
+        /// <summary>Cool-down after a driver's first timeout.</summary>
+        public const int DefaultDriverCooldownMs = 60000;
+
+        /// <summary>Upper bound for the exponential driver cool-down.</summary>
+        public const int DefaultDriverCooldownMaxMs = 600000;
+
+        /// <summary>Wait for a busy scanner before failing a scan request.</summary>
+        public const int DefaultScanQueueTimeoutMs = 5000;
+
+        /// <summary>Overall cap for a single scan job.</summary>
+        public const int DefaultScanOverallTimeoutMs = 600000;
+
+        /// <summary>Watchdog re-armed after each scanned page.</summary>
+        public const int DefaultScanNoProgressTimeoutMs = 120000;
+
+        /// <summary>Grace period for the web host during shutdown.</summary>
+        public const int DefaultShutdownTimeoutMs = 5000;
+    }
 }

@@ -41,6 +41,65 @@ public static class ConfigurationValidator
             errors.Add($"StartupDelay must be between 0ms and 60000ms, got {config.StartupDelay}");
         }
 
+        // Validate device discovery budgets
+        if (config.DriverTimeoutMs < 1000 || config.DriverTimeoutMs > 120000)
+        {
+            errors.Add($"DriverTimeoutMs must be between 1000ms and 120000ms, got {config.DriverTimeoutMs}");
+        }
+
+        if (config.EsclSearchTimeoutMs < 500 || config.EsclSearchTimeoutMs > config.DriverTimeoutMs)
+        {
+            errors.Add($"EsclSearchTimeoutMs must be between 500ms and DriverTimeoutMs ({config.DriverTimeoutMs}ms), got {config.EsclSearchTimeoutMs}");
+        }
+
+        if (config.EsclSearchMarginMs < 0 || config.EsclSearchMarginMs > 10000)
+        {
+            errors.Add($"EsclSearchMarginMs must be between 0ms and 10000ms, got {config.EsclSearchMarginMs}");
+        }
+
+        if (config.DriverCooldownMs < 5000 || config.DriverCooldownMs > 1800000)
+        {
+            errors.Add($"DriverCooldownMs must be between 5000ms and 1800000ms, got {config.DriverCooldownMs}");
+        }
+
+        if (config.DriverCooldownMaxMs < config.DriverCooldownMs || config.DriverCooldownMaxMs > 3600000)
+        {
+            errors.Add($"DriverCooldownMaxMs must be between DriverCooldownMs ({config.DriverCooldownMs}ms) and 3600000ms, got {config.DriverCooldownMaxMs}");
+        }
+
+        // Validate scan job bounds
+        if (config.ScanQueueTimeoutMs < 0 || config.ScanQueueTimeoutMs > 60000)
+        {
+            errors.Add($"ScanQueueTimeoutMs must be between 0ms and 60000ms, got {config.ScanQueueTimeoutMs}");
+        }
+
+        if (config.ScanOverallTimeoutMs < 30000 || config.ScanOverallTimeoutMs > 3600000)
+        {
+            errors.Add($"ScanOverallTimeoutMs must be between 30000ms and 3600000ms, got {config.ScanOverallTimeoutMs}");
+        }
+
+        if (config.ScanNoProgressTimeoutMs < 10000 || config.ScanNoProgressTimeoutMs > config.ScanOverallTimeoutMs)
+        {
+            errors.Add($"ScanNoProgressTimeoutMs must be between 10000ms and ScanOverallTimeoutMs ({config.ScanOverallTimeoutMs}ms), got {config.ScanNoProgressTimeoutMs}");
+        }
+
+        // Validate shutdown grace period
+        if (config.ShutdownTimeoutMs < 1000 || config.ShutdownTimeoutMs > 30000)
+        {
+            errors.Add($"ShutdownTimeoutMs must be between 1000ms and 30000ms, got {config.ShutdownTimeoutMs}");
+        }
+
+        // Validate HTTP request timeout policies (must leave headroom above the internal budgets)
+        if (config.ScannersRequestTimeoutSeconds <= config.DriverTimeoutMs / 1000 + 5 || config.ScannersRequestTimeoutSeconds > 300)
+        {
+            errors.Add($"ScannersRequestTimeoutSeconds must be greater than DriverTimeoutMs + 5s ({config.DriverTimeoutMs / 1000 + 5}s) and at most 300s, got {config.ScannersRequestTimeoutSeconds}s");
+        }
+
+        if (config.ScanRequestTimeoutSeconds <= config.ScanOverallTimeoutMs / 1000 + 30 || config.ScanRequestTimeoutSeconds > 7200)
+        {
+            errors.Add($"ScanRequestTimeoutSeconds must be greater than ScanOverallTimeoutMs + 30s ({config.ScanOverallTimeoutMs / 1000 + 30}s) and at most 7200s, got {config.ScanRequestTimeoutSeconds}s");
+        }
+
         return (errors.Count == 0, errors);
     }
 

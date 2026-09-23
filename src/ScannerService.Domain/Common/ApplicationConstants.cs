@@ -68,4 +68,11 @@ public static class ApplicationConstants
         public const int DefaultExportSettingId = 1;
         public const int MaxNameLength = 100;
     }
+
+    /// <summary>Named ASP.NET request timeout policies (registered by the host).</summary>
+    public static class RequestTimeoutPolicies
+    {
+        public const string Scanners = "scanners";
+        public const string Scan = "scan";
+    }
 }

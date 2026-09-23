@@ -100,7 +100,7 @@ public class TrayApp : ApplicationContext
         _httpClientServiceProvider = serviceCollection.BuildServiceProvider();
         _httpClientFactory = _httpClientServiceProvider.GetService<IHttpClientFactory>()!;
 
-        _webApiHost = new WebApiHostService(_config.ApiPort);
+        _webApiHost = new WebApiHostService(_config);
 
         _icon = new NotifyIcon
         {
@@ -532,7 +532,7 @@ public class TrayApp : ApplicationContext
 
         if (result == DialogResult.Yes)
         {
-            StopService();
+            // Dispose performs the (bounded) stop; calling StopService here as well would race it.
             Dispose();
             System.Windows.Forms.Application.Exit();
         }
@@ -552,7 +552,7 @@ public class TrayApp : ApplicationContext
 
         if (result == DialogResult.Yes)
         {
-            StopService();
+            // Dispose performs the (bounded) stop; calling StopService here as well would race it.
             Dispose();
 
             if (Program.RestartAsAdministrator())

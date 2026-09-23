@@ -31,7 +31,8 @@ public class WebApiHostService : IDisposable
     private WebApplication? _app;
     private CancellationTokenSource? _cts;
     private Task? _runTask;
-    private readonly int _requestedPort;
+    private readonly ScannerServiceConfiguration _config;
+    private readonly SemaphoreSlim _stopGate = new(1, 1);
     private bool _isDisposed;
 
     private static readonly CompositeFormat DataSourceFormat = CompositeFormat.Parse("Data Source={0}");
@@ -42,10 +43,10 @@ public class WebApiHostService : IDisposable
     public bool IsRunning { get; private set; }
     public int ActualPort { get; private set; }
 
-    public WebApiHostService(int port)
+    public WebApiHostService(ScannerServiceConfiguration config)
     {
-        _requestedPort = port;
-        ActualPort = port;
+        _config = config;
+        ActualPort = config.ApiPort;
     }
 
     public async Task StartAsync()
@@ -77,10 +78,10 @@ public class WebApiHostService : IDisposable
             SerilogConfigurationExtensions.InitializeSerilog(loggingConfig, AppContext.BaseDirectory);
             builder.Host.UseSerilog();
 
-            var availablePort = await FindAvailablePortAsync(_requestedPort);
-            if (availablePort != _requestedPort)
+            var availablePort = await FindAvailablePortAsync(_config.ApiPort);
+            if (availablePort != _config.ApiPort)
             {
-                Log.Warning("Requested port {RequestedPort} is in use, using alternative port {AvailablePort}", _requestedPort, availablePort);
+                Log.Warning("Requested port {RequestedPort} is in use, using alternative port {AvailablePort}", _config.ApiPort, availablePort);
             }
             ActualPort = availablePort;
 
@@ -94,6 +95,34 @@ public class WebApiHostService : IDisposable
             var dbPath = Path.Combine(AppContext.BaseDirectory, "scanner.db");
             builder.Services.AddDbContext<Context>(options =>
                 options.UseSqlite(string.Format(CultureInfo.InvariantCulture, DataSourceFormat, dbPath)));
+
+            // Bounded budgets for scanner discovery/scanning (drivers can hang on offline devices)
+            builder.Services.AddSingleton(new Domain.Common.ScannerTimeouts
+            {
+                DriverTimeoutMs = _config.DriverTimeoutMs,
+                EsclSearchTimeoutMs = _config.EsclSearchTimeoutMs,
+                EsclSearchMarginMs = _config.EsclSearchMarginMs,
+                DriverCooldownMs = _config.DriverCooldownMs,
+                DriverCooldownMaxMs = _config.DriverCooldownMaxMs,
+                ScanQueueTimeoutMs = _config.ScanQueueTimeoutMs,
+                ScanOverallTimeoutMs = _config.ScanOverallTimeoutMs,
+                ScanNoProgressTimeoutMs = _config.ScanNoProgressTimeoutMs,
+                ShutdownTimeoutMs = _config.ShutdownTimeoutMs
+            });
+
+            // Bound the host's graceful-shutdown drain (the 30s default lets a wedged request stall exit)
+            builder.Services.Configure<HostOptions>(options =>
+                options.ShutdownTimeout = TimeSpan.FromMilliseconds(_config.ShutdownTimeoutMs));
+
+            // Hard backstop so HTTP clients always receive a status code even when a native scanner
+            // call ignores cancellation; registered policies are applied per-endpoint.
+            builder.Services.AddRequestTimeouts(options =>
+            {
+                options.AddPolicy(Domain.Common.ApplicationConstants.RequestTimeoutPolicies.Scanners,
+                    TimeSpan.FromSeconds(_config.ScannersRequestTimeoutSeconds));
+                options.AddPolicy(Domain.Common.ApplicationConstants.RequestTimeoutPolicies.Scan,
+                    TimeSpan.FromSeconds(_config.ScanRequestTimeoutSeconds));
+            });
 
             // Scanner services with proper lifetime management
             builder.Services.AddSingleton<Infrastructure.Services.ScannerInitializer>();
@@ -134,6 +163,9 @@ public class WebApiHostService : IDisposable
                         .AllowCredentials()));
 
             _app = builder.Build();
+
+            // First middleware: enforces the registered request timeout policies (408 backstop)
+            _app.UseRequestTimeouts();
 
             // Request body size configuration
             _app.Use(async (context, next) =>
@@ -209,7 +241,7 @@ public class WebApiHostService : IDisposable
             _runTask = _app.RunAsync(_cts?.Token ?? CancellationToken.None);
             IsRunning = true;
 
-            Log.Information("Scanner Service API started successfully on port {ActualPort} (requested: {RequestedPort})", ActualPort, _requestedPort);
+            Log.Information("Scanner Service API started successfully on port {ActualPort} (requested: {RequestedPort})", ActualPort, _config.ApiPort);
             Debug.WriteLine(string.Format(CultureInfo.InvariantCulture, WebApiStartedFormat, ActualPort));
         }
         catch (IOException ex) when (ex.InnerException is Microsoft.AspNetCore.Connections.AddressInUseException)
@@ -239,6 +271,13 @@ public class WebApiHostService : IDisposable
             return;
         }
 
+        // Reentrancy-safe: concurrent stop attempts (e.g. menu + dispose racing) are ignored.
+#pragma warning disable S8949 // Deliberately token-free: the shutdown CTS is already cancelled here and must not void the bound
+        if (!await _stopGate.WaitAsync(TimeSpan.Zero))
+        {
+            return;
+        }
+
         try
         {
             Log.Information("Stopping Scanner Service API");
@@ -247,7 +286,17 @@ public class WebApiHostService : IDisposable
 
             if (_runTask != null)
             {
-                await _runTask.ConfigureAwait(false);
+                // Bound the wait: a wedged in-flight request must not block shutdown indefinitely.
+                Task winner = await Task.WhenAny(_runTask, Task.Delay(_config.ShutdownTimeoutMs)).ConfigureAwait(false);
+#pragma warning restore S8949
+                if (winner == _runTask)
+                {
+                    await _runTask.ConfigureAwait(false);
+                }
+                else
+                {
+                    Log.Error("Web API host did not stop within {TimeoutMs}ms; continuing shutdown", _config.ShutdownTimeoutMs);
+                }
             }
 
             // Clean up temporary files before disposing the app
@@ -260,7 +309,7 @@ public class WebApiHostService : IDisposable
 
             if (_app != null)
             {
-                await _app.DisposeAsync();
+                await _app.DisposeAsync().ConfigureAwait(false);
                 _app = null;
             }
 
@@ -278,6 +327,7 @@ public class WebApiHostService : IDisposable
             _cts?.Dispose();
             _cts = null;
             _runTask = null;
+            _stopGate.Release();
         }
     }
 
@@ -289,7 +339,19 @@ public class WebApiHostService : IDisposable
         }
 
         _isDisposed = true;
-        StopAsync().GetAwaiter().GetResult();
+
+        // Bound the whole stop: container dispose includes scanner worker teardown, which can block on
+        // a hung driver even after the host itself has stopped. StopAsync swallows its own exceptions.
+#pragma warning disable S8949 // Deliberately token-free: there is no valid ambient token during final dispose
+        var stopTask = Task.Run(StopAsync);
+        int shutdownBoundMs = _config.ShutdownTimeoutMs * 3;
+        var winner = Task.WhenAny(stopTask, Task.Delay(shutdownBoundMs)).GetAwaiter().GetResult();
+#pragma warning restore S8949
+        if (winner != stopTask)
+        {
+            Log.Error("Web API stop did not complete within {TimeoutMs}ms; continuing shutdown", shutdownBoundMs);
+        }
+
         Log.CloseAndFlush();
         GC.SuppressFinalize(this);
     }

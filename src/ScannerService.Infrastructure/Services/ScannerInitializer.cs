@@ -138,7 +138,17 @@ public sealed class ScannerInitializer : IScannerInitializer, IScannerInitialize
     {
         _logger.LogInformation("Disposing scanner initializer");
 
-        _context?.Dispose();
+        try
+        {
+            // Worker teardown can block or race a cold-start initialization during shutdown; a failure
+            // here must not break the shutdown sequence.
+            _context?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to dispose scanner context cleanly");
+        }
+
         _lock.Dispose();
 
         await Task.CompletedTask;

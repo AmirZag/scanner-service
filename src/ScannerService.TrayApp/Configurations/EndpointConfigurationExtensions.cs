@@ -88,7 +88,9 @@ public static class EndpointConfigurationExtensions
         .WithName("GetDetailedHealth")
         .WithTags("Health")
         .Produces<DetailedApiHealthCheckDto>(StatusCodes.Status200OK)
-        .Produces<DetailedApiHealthCheckDto>(StatusCodes.Status503ServiceUnavailable);
+        .Produces<DetailedApiHealthCheckDto>(StatusCodes.Status503ServiceUnavailable)
+        .Produces(StatusCodes.Status408RequestTimeout)
+        .WithRequestTimeout(Domain.Common.ApplicationConstants.RequestTimeoutPolicies.Scanners);
     }
 
     /// <summary>
@@ -100,7 +102,9 @@ public static class EndpointConfigurationExtensions
             Results.Ok(await svc.GetScannersListAsync(ct)))
             .WithName("GetAllScanners")
             .WithTags("Scanners")
-            .Produces(StatusCodes.Status200OK);
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status408RequestTimeout)
+            .WithRequestTimeout(Domain.Common.ApplicationConstants.RequestTimeoutPolicies.Scanners);
     }
 
     /// <summary>
@@ -208,7 +212,8 @@ public static class EndpointConfigurationExtensions
         .Produces(StatusCodes.Status200OK, contentType: "application/zip")
         .Produces(StatusCodes.Status400BadRequest)
         .ProducesValidationProblem()
-        .Accepts<ScanRequestDto>("application/json");
+        .Accepts<ScanRequestDto>("application/json")
+        .WithRequestTimeout(Domain.Common.ApplicationConstants.RequestTimeoutPolicies.Scan);
     }
 
     /// <summary>

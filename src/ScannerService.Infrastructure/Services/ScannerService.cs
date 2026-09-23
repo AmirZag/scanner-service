@@ -17,13 +17,23 @@ namespace ScannerService.Infrastructure.Services;
 public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 {
     private readonly IScannerInitializer _initializer;
+    private readonly ScannerTimeouts _timeouts;
+    private readonly DriverHealthTracker _healthTracker;
     private readonly ILogger<ScannerService> _logger;
+
+    /// <summary>
+    /// Serializes scan jobs: a scanner is a physical serial device, so concurrent jobs are rejected
+    /// (after a short queue wait) instead of being started against a busy device.
+    /// </summary>
+    private readonly SemaphoreSlim _scanGate = new(1, 1);
     private readonly ConcurrentBag<string> _tempBitmapFiles = new();
 
-    public ScannerService(IScannerInitializer initializer, ILogger<ScannerService> _logger)
+    public ScannerService(IScannerInitializer initializer, ScannerTimeouts timeouts, ILogger<ScannerService> logger)
     {
         _initializer = initializer;
-        this._logger = _logger;
+        _timeouts = timeouts;
+        _healthTracker = new DriverHealthTracker(timeouts);
+        _logger = logger;
     }
 
     public async Task<List<ScannerDto>> GetScannersListAsync(CancellationToken cancellationToken = default)
@@ -34,35 +44,18 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         var drivers = ScannerDriverFactory.GetAvailableDrivers();
         var controller = ((IScannerInitializerContext)_initializer).Controller;
 
-        // Query drivers in parallel for better performance
-        var driverTasks = drivers.Select(async driver =>
-        {
-            if (ScannerDriverFactory.ShouldSkipDriver(driver, _initializer.TwainWorkerFailed))
-            {
-                _logger.LogDebug("Skipping TWAIN driver due to worker initialization failure");
-                return (Scanners: new List<ScannerDto>(), Driver: driver);
-            }
-
-            try
-            {
-                var devices = await controller.GetDeviceList(driver);
-                var scannerDtos = devices.Select(d => new ScannerDto(d.ID, d.Name, driver.ToString())).ToList();
-                _logger.LogDebug("Found {Count} devices for driver {Driver}", devices.Count, driver);
-                return (Scanners: scannerDtos, Driver: driver);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to get devices for driver {Driver}", driver);
-                return (Scanners: new List<ScannerDto>(), Driver: driver);
-            }
-        }).ToList();
+        // Each driver is queried with its own timeout budget; a hung driver is abandoned and skipped
+        // so the other drivers still contribute their devices.
+        var driverTasks = drivers
+            .Select(async driver => (Driver: driver, Devices: await QueryDriverDevicesAsync(driver, controller, cancellationToken)))
+            .ToList();
 
         var results = await Task.WhenAll(driverTasks);
 
         var scanners = new List<ScannerDto>();
-        foreach (var (driverScanners, _) in results)
+        foreach (var (driver, devices) in results)
         {
-            scanners.AddRange(driverScanners);
+            scanners.AddRange(devices.Select(d => new ScannerDto(d.ID, d.Name, driver.ToString())));
         }
 
         _logger.LogInformation("Found {TotalCount} total scanners across all drivers", scanners.Count);
@@ -75,6 +68,24 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         _logger.LogInformation("Starting scan operation - DeviceId: {DeviceId}, Format: {Format}, Resolution: {Resolution}",
             scanJobConfiguration.DeviceId, scanJobConfiguration.Format, scanJobConfiguration.Resolution);
 
+        if (!await _scanGate.WaitAsync(_timeouts.ScanQueueTimeout, cancellationToken))
+        {
+            _logger.LogWarning("Scan rejected - another scan is in progress - DeviceId: {DeviceId}", scanJobConfiguration.DeviceId);
+            return Result<List<string>>.Failure("Scanner is busy with another scan job. Please wait for it to finish and try again.");
+        }
+
+        try
+        {
+            return await ExecuteScanCoreAsync(scanJobConfiguration, scanStartTime, cancellationToken);
+        }
+        finally
+        {
+            _scanGate.Release();
+        }
+    }
+
+    private async Task<Result<List<string>>> ExecuteScanCoreAsync(ScanJobConfiguration scanJobConfiguration, DateTime scanStartTime, CancellationToken cancellationToken)
+    {
         await _initializer.InitializeAsync(cancellationToken);
         var context = ((IScannerInitializerContext)_initializer).Context;
         var controller = ((IScannerInitializerContext)_initializer).Controller;
@@ -98,42 +109,90 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         _logger.LogDebug("Scan options configured - Dpi: {Dpi}, BitDepth: {BitDepth}, PaperSource: {PaperSource}",
             options.Dpi, options.BitDepth, options.PaperSource);
 
+        // The scanner driver has no native cancellation (the token only bites at await points), so the
+        // watchdog bounds the wait: a no-progress deadline re-armed after every page, while the overall
+        // job cap is enforced by the WaitAsync race below.
+        using var watchdogCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        watchdogCts.CancelAfter(_timeouts.ScanNoProgressTimeout);
+
         var images = new List<ProcessedImage>();
 
+        // The consumer owns the images until it completes successfully; on any failure, cancellation or
+        // watchdog timeout it disposes whatever was captured so the caller never leaks ProcessedImage.
+        var imagesOwnedByCaller = new bool[1];
+        var consumeTask = Task.Run(async () =>
+        {
+            try
+            {
+                // watchdogCts is linked to cancellationToken (so client aborts bite at await points) and is
+                // re-armed after every page; the WaitAsync race below bounds drivers that ignore the token.
+#pragma warning disable S8949 // Passing the linked watchdog token is intentional; NAPS2 Scan has no token parameter
+                await foreach (var image in controller.Scan(options).WithCancellation(watchdogCts.Token))
+#pragma warning restore S8949
+                {
+                    images.Add(image);
+                    watchdogCts.CancelAfter(_timeouts.ScanNoProgressTimeout);
+                    _logger.LogDebug("Captured image {ImageNumber} at {Timestamp}", images.Count, DateTime.UtcNow);
+                }
+                imagesOwnedByCaller[0] = true;
+                return true;
+            }
+            finally
+            {
+                if (!imagesOwnedByCaller[0])
+                {
+                    foreach (var img in images)
+                    {
+                        img.Dispose();
+                    }
+                }
+            }
+        }, watchdogCts.Token);
+
+        List<string> files;
         try
         {
-#pragma warning disable CA2016, S8949 // NAPS2 Scan method doesn't support cancellation tokens
-            await foreach (var image in controller.Scan(options).WithCancellation(CancellationToken.None))
-#pragma warning restore CA2016, S8949
+            bool completed = await consumeTask.WaitAsync(_timeouts.ScanOverallTimeout, cancellationToken);
+
+            if (!completed || images.Count == 0)
             {
-                images.Add(image);
-                _logger.LogDebug("Captured image {ImageNumber} at {Timestamp}", images.Count, DateTime.UtcNow);
+                var noImagesDuration = DateTime.UtcNow - scanStartTime;
+                _logger.LogWarning("No images were scanned - Duration: {DurationMs}ms", noImagesDuration.TotalMilliseconds);
+                return Result<List<string>>.Failure("No images were scanned. Please ensure the document is properly placed in the scanner and try again.");
             }
+        }
+        catch (TimeoutException ex)
+        {
+            await watchdogCts.CancelAsync();
+            await ObserveAbortedConsumerAsync(consumeTask, images);
+
+            var timeoutDuration = DateTime.UtcNow - scanStartTime;
+            _logger.LogError(ex, "Scan timed out after {DurationMs}ms - the scanner may be offline or unresponsive - DeviceId: {DeviceId}",
+                timeoutDuration.TotalMilliseconds, scanJobConfiguration.DeviceId);
+            return Result<List<string>>.Failure(
+                $"Scan timed out after {Math.Round(_timeouts.ScanOverallTimeout.TotalSeconds)} seconds. The scanner may be offline or unresponsive.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The requesting client is gone; let the consumer unwind and clean up on its own.
+            throw;
+        }
+        catch (OperationCanceledException ex)
+        {
+            var stallDuration = DateTime.UtcNow - scanStartTime;
+            _logger.LogWarning(ex, "Scan aborted - no progress from the scanner within {NoProgressMs}ms - Duration: {DurationMs}ms - DeviceId: {DeviceId}",
+                _timeouts.ScanNoProgressTimeoutMs, stallDuration.TotalMilliseconds, scanJobConfiguration.DeviceId);
+            return Result<List<string>>.Failure("Scan aborted because the scanner made no progress. The scanner may be offline or unresponsive.");
         }
         catch (Exception ex)
         {
-            var duration = DateTime.UtcNow - scanStartTime;
-            _logger.LogError(ex, "Error during scan operation - Duration: {DurationMs}ms", duration.TotalMilliseconds);
-
-            // Dispose any images that were captured before the error
-            foreach (var img in images)
-            {
-                img.Dispose();
-            }
-
+            var failureDuration = DateTime.UtcNow - scanStartTime;
+            _logger.LogError(ex, "Error during scan operation - Duration: {DurationMs}ms", failureDuration.TotalMilliseconds);
             return Result<List<string>>.Failure($"Scan operation failed: {ex.Message}");
-        }
-
-        if (images.Count == 0)
-        {
-            var duration = DateTime.UtcNow - scanStartTime;
-            _logger.LogWarning("No images were scanned - Duration: {DurationMs}ms", duration.TotalMilliseconds);
-            return Result<List<string>>.Failure("No images were scanned. Please ensure the document is properly placed in the scanner and try again.");
         }
 
         _logger.LogInformation("Scanned {ImageCount} images, saving as {Format}", images.Count, scanJobConfiguration.Format);
 
-        List<string> files;
         try
         {
             files = await SaveAsync(images, scanJobConfiguration, context);
@@ -159,6 +218,118 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         return Result<List<string>>.Success(files);
     }
 
+    /// <summary>
+    /// Waits briefly for a scan consumer aborted by the watchdog so it can finish disposing partial images.
+    /// If it succeeded in that window (deadline hit exactly as the last page arrived) the still-live images
+    /// are disposed here; a faulted consumer is observed to avoid an unobserved task exception.
+    /// </summary>
+    private async Task ObserveAbortedConsumerAsync(Task<bool> consumeTask, List<ProcessedImage> images)
+    {
+        try
+        {
+            await consumeTask.WaitAsync(TimeSpan.FromSeconds(2));
+            if (await consumeTask)
+            {
+                foreach (var img in images)
+                {
+                    img.Dispose();
+                }
+            }
+        }
+        catch (TimeoutException ex)
+        {
+            _logger.LogDebug(ex, "Scan consumer is still unwinding after watchdog cancellation; it will clean up its own images");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Scan consumer stopped after watchdog cancellation");
+        }
+    }
+
+    /// <summary>
+    /// Queries a single driver for its devices under a strict timeout budget.
+    /// Drivers known to be unresponsive (cooling down) or unusable are skipped; on timeout the partial
+    /// results collected so far are returned and the driver enters a cool-down instead of being retried
+    /// immediately on the next request.
+    /// </summary>
+    private async Task<List<ScanDevice>> QueryDriverDevicesAsync(Driver driver, ScanController controller, CancellationToken cancellationToken)
+    {
+        if (ScannerDriverFactory.ShouldSkipDriver(driver, _initializer.TwainWorkerFailed))
+        {
+            _logger.LogDebug("Skipping driver {Driver} due to TWAIN worker initialization failure", driver);
+            return [];
+        }
+
+        if (_healthTracker.IsCoolingDown(driver))
+        {
+            _logger.LogDebug("Skipping driver {Driver} until {RetryAt} - cooling down after unresponsiveness",
+                driver, _healthTracker.CoolDownEnd(driver));
+            return [];
+        }
+
+        TimeSpan budget = driver == Driver.Escl ? _timeouts.EsclDeviceSearchBudget : _timeouts.DriverTimeout;
+
+        // Native enumeration (WIA/TWAIN) cannot be interrupted; the token bounds only drivers that honor
+        // it (ESCL). The collector owns its queue so an abandoned task can never mutate a list that was
+        // already returned to a caller.
+        var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        try
+        {
+            linkedCts.CancelAfter(budget);
+
+            var devices = new ConcurrentQueue<ScanDevice>();
+            var collectTask = Task.Run(async () =>
+            {
+                try
+                {
+                    var options = new ScanOptions { Driver = driver };
+                    options.EsclOptions ??= new EsclOptions();
+                    options.EsclOptions.SearchTimeout = _timeouts.EsclSearchTimeoutMs;
+                    await foreach (var device in controller.GetDevices(options, linkedCts.Token))
+                    {
+                        devices.Enqueue(device);
+                    }
+                    return true;
+                }
+                catch (OperationCanceledException)
+                {
+                    return false;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Device enumeration failed for driver {Driver}", driver);
+                    return false;
+                }
+            }, linkedCts.Token);
+
+            try
+            {
+                bool completed = await collectTask.WaitAsync(budget, cancellationToken);
+                if (completed)
+                {
+                    _healthTracker.RecordSuccess(driver);
+                }
+                return devices.ToList();
+            }
+            catch (TimeoutException ex)
+            {
+                _healthTracker.RecordTimeout(driver);
+                var snapshot = devices.ToList();
+                _logger.LogWarning(ex,
+                    "Device enumeration for driver {Driver} exceeded {BudgetMs}ms; returning {DeviceCount} partial device(s) and cooling down until {RetryAt}",
+                    driver, budget.TotalMilliseconds, snapshot.Count, _healthTracker.CoolDownEnd(driver));
+                return snapshot;
+            }
+        }
+        finally
+        {
+            // Cancel before disposing so drivers honoring the token (ESCL) unwind instead of leaking a
+            // pending delay on a disposed source.
+            await linkedCts.CancelAsync();
+            linkedCts.Dispose();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         _logger.LogInformation("Disposing scanner provider");
@@ -180,6 +351,15 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             }
         }
         _tempBitmapFiles.Clear();
+
+        try
+        {
+            _scanGate.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to dispose scan gate");
+        }
 
         if (_initializer is IAsyncDisposable asyncDisposable)
         {
@@ -296,37 +476,21 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         return new Bitmap(tempPath);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Code", "IDE0060:Remove unused parameter", Justification = "CancellationToken kept for interface consistency")]
     private async Task<ScanDevice?> FindDeviceAsync(string deviceId, ScanController controller, CancellationToken cancellationToken)
     {
         var drivers = ScannerDriverFactory.GetAvailableDrivers();
 
-        // Query drivers in parallel, but return as soon as we find the device
-        var driverTasks = drivers.Select(async driver =>
-        {
-            if (ScannerDriverFactory.ShouldSkipDriver(driver, _initializer.TwainWorkerFailed))
-            {
-                return (Device: (ScanDevice?)null, Driver: driver);
-            }
-
-            try
-            {
-                var devices = await controller.GetDeviceList(driver);
-                var device = devices.FirstOrDefault(d => d.ID == deviceId);
-                return (Device: device, Driver: driver);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Error searching for device in driver {Driver}", driver);
-                return (Device: (ScanDevice?)null, Driver: driver);
-            }
-        }).ToList();
+        // Bounded by the per-driver budgets in QueryDriverDevicesAsync; the drivers are queried in
+        // parallel and the first matching device wins.
+        var driverTasks = drivers
+            .Select(async driver => await QueryDriverDevicesAsync(driver, controller, cancellationToken))
+            .ToList();
 
         var results = await Task.WhenAll(driverTasks);
 
-        // Return first non-null device
-        foreach (var (device, _) in results)
+        foreach (var devices in results)
         {
+            var device = devices.FirstOrDefault(d => d.ID == deviceId);
             if (device != null)
             {
                 return device;
