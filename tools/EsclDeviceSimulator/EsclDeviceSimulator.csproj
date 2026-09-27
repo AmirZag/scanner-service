@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0-windows</TargetFramework>
+		<!-- This tool manages its own dependency versions (it is built on demand, not part of the main solution).
+		     The production analyzer strictness is deliberately relaxed: it is a dev-only test utility. -->
+		<ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+		<TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+		<CodeAnalysisTreatWarningsAsErrors>false</CodeAnalysisTreatWarningsAsErrors>
+		<AnalysisMode>Default</AnalysisMode>
+		<EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+		<NoWarn>$(NoWarn);CA1303;CA2000;CA2008;CA1305</NoWarn>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- Not needed for a test tool and would have no CPM version here -->
+		<PackageReference Remove="SonarAnalyzer.CSharp" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="NAPS2.Escl.Server" Version="1.3.0" />
+		<PackageReference Include="System.Drawing.Common" Version="10.0.12" />
+	</ItemGroup>
+
+</Project>
