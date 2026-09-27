@@ -211,12 +211,17 @@ public class ScanJobService : IScanJobService
             else
             {
                 var zipPath = Path.Combine(Path.GetTempPath(), $"scan_{Guid.NewGuid()}.zip");
-                await ZipFile.CreateFromDirectoryAsync(
-                    Path.GetDirectoryName(files[0])!,
-                    zipPath,
-                    CompressionLevel.Optimal,
-                    false,
-                    cancellationToken);
+
+                // Zip only this scan's files; the export directory may hold months of earlier scans
+                // and zipping it wholesale would leak them into every multi-page response.
+                await using (var zipStream = new FileStream(zipPath, FileMode.CreateNew))
+                await using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
+                {
+                    foreach (var file in files)
+                    {
+                        await archive.CreateEntryFromFileAsync(file, Path.GetFileName(file), CompressionLevel.Optimal, cancellationToken);
+                    }
+                }
 
                 // Track for cleanup
                 lock (TempFilesToDelete)
