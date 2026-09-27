@@ -15,7 +15,10 @@ public class ScanJobService : IScanJobService
     private readonly IScannerService _scannerService;
     private readonly IExportSettingRepository _exportSettingRepository;
     private readonly ILogger<ScanJobService> _logger;
-    private readonly HashSet<string> _tempFilesToDelete = new();
+
+    // The service is registered scoped, but temp files must be tracked process-wide: cleanup runs from
+    // a different scope at shutdown, and files created in request scopes would otherwise be invisible.
+    private static readonly HashSet<string> TempFilesToDelete = new();
 
     public ScanJobService(
         Context context,
@@ -35,12 +38,12 @@ public class ScanJobService : IScanJobService
     /// </summary>
     public void CleanupOldTempFiles(TimeSpan maxAge)
     {
-        lock (_tempFilesToDelete)
+        lock (TempFilesToDelete)
         {
             var now = DateTime.UtcNow;
             var filesToDelete = new List<string>();
 
-            foreach (var filePath in _tempFilesToDelete)
+            foreach (var filePath in TempFilesToDelete)
             {
                 try
                 {
@@ -65,7 +68,8 @@ public class ScanJobService : IScanJobService
                 }
             }
 
-            // Delete the files and remove from tracking
+            // Delete the files, untracking only what was actually removed so a file that could not be
+            // deleted (e.g. still being streamed) is retried by a later sweep instead of leaking.
             foreach (var filePath in filesToDelete)
             {
                 try
@@ -75,12 +79,13 @@ public class ScanJobService : IScanJobService
                         File.Delete(filePath);
                         _logger.LogDebug("Cleaned up old temporary file: {FilePath}", filePath);
                     }
+
+                    TempFilesToDelete.Remove(filePath);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Failed to delete temp file: {FilePath}", filePath);
                 }
-                _tempFilesToDelete.Remove(filePath);
             }
         }
     }
@@ -92,21 +97,35 @@ public class ScanJobService : IScanJobService
     /// </summary>
     public Result CleanupTempFile(string filePath)
     {
-        if (_tempFilesToDelete.Remove(filePath))
+        bool tracked;
+        lock (TempFilesToDelete)
         {
-            try
-            {
-                File.Delete(filePath);
-                _logger.LogDebug("Cleaned up temporary file: {FilePath}", filePath);
-                return Result.Success();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to clean up temporary file: {FilePath}", filePath);
-                return Result.Failure($"Failed to clean up temporary file: {ex.Message}");
-            }
+            tracked = TempFilesToDelete.Remove(filePath);
         }
-        return Result.Failure("File not found in temp files tracking");
+
+        if (!tracked)
+        {
+            return Result.Failure("File not found in temp files tracking");
+        }
+
+        try
+        {
+            File.Delete(filePath);
+            _logger.LogDebug("Cleaned up temporary file: {FilePath}", filePath);
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            // Keep the entry so a later sweep (e.g. at shutdown) retries; untracking here would
+            // leak the file for the rest of the process lifetime.
+            lock (TempFilesToDelete)
+            {
+                TempFilesToDelete.Add(filePath);
+            }
+
+            _logger.LogWarning(ex, "Failed to clean up temporary file: {FilePath}", filePath);
+            return Result.Failure($"Failed to clean up temporary file: {ex.Message}");
+        }
     }
 
     public async Task<Result<ScanResultDto>> StartScanJobAsync(ScanRequestDto req, CancellationToken cancellationToken = default)
@@ -199,9 +218,9 @@ public class ScanJobService : IScanJobService
                     false);
 
                 // Track for cleanup
-                lock (_tempFilesToDelete)
+                lock (TempFilesToDelete)
                 {
-                    _tempFilesToDelete.Add(zipPath);
+                    TempFilesToDelete.Add(zipPath);
                 }
 
                 filePath = zipPath;

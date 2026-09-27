@@ -11,13 +11,17 @@ namespace ScannerService.Infrastructure.Services;
 /// A single-flight gate prevents concurrent requests from each starting their own device
 /// enumeration, and the last known list is served when a refresh fails outright.
 /// </summary>
-public sealed class CachedScannerService : IScannerQueries, IDisposable
+public sealed class CachedScannerService : IScannerQueries, IScannerListCache, IDisposable
 {
     private readonly IScannerQueries _innerService;
     private readonly IMemoryCache _cache;
     private readonly ILogger<CachedScannerService> _logger;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private List<ScannerDto>? _lastGoodList;
+
+    // Bumped by ClearScannerListCache so an enumeration already in flight knows its result predates
+    // the clear and must not re-cache it.
+    private int _cacheGeneration;
 
     // Cache durations
     private static readonly TimeSpan ScannerListCacheDuration = TimeSpan.FromSeconds(30);
@@ -58,17 +62,27 @@ public sealed class CachedScannerService : IScannerQueries, IDisposable
 
             // Not in cache, fetch from inner service
             _logger.LogDebug("Fetching scanner list from inner service");
+            var generation = Volatile.Read(ref _cacheGeneration);
             var scannerList = await _innerService.GetScannersListAsync(cancellationToken);
 
-            // Cache the result. Partial (degraded) lists are cached deliberately: with the driver
-            // cool-down in place they are stable across the TTL instead of re-triggering timeouts.
-            var cacheEntryOptions = new MemoryCacheEntryOptions()
-                .SetAbsoluteExpiration(ScannerListCacheDuration)
-                .SetSize(1); // Each entry counts as 1 unit
+            // Cache the result only if no clear happened while enumerating; otherwise the next request
+            // must re-enumerate, as the refresh endpoint promises. Partial (degraded) lists are cached
+            // deliberately: with the driver cool-down in place they are stable across the TTL instead
+            // of re-triggering timeouts.
+            if (generation == Volatile.Read(ref _cacheGeneration))
+            {
+                var cacheEntryOptions = new MemoryCacheEntryOptions()
+                    .SetAbsoluteExpiration(ScannerListCacheDuration)
+                    .SetSize(1); // Each entry counts as 1 unit
 
-            _cache.Set(ScannerListCacheKey, scannerList, cacheEntryOptions);
-            _lastGoodList = scannerList;
-            _logger.LogDebug("Cached scanner list for {Duration} seconds", ScannerListCacheDuration.TotalSeconds);
+                _cache.Set(ScannerListCacheKey, scannerList, cacheEntryOptions);
+                _lastGoodList = scannerList;
+                _logger.LogDebug("Cached scanner list for {Duration} seconds", ScannerListCacheDuration.TotalSeconds);
+            }
+            else
+            {
+                _logger.LogDebug("Skipping scanner list cache; the list was cleared while enumerating");
+            }
 
             return scannerList;
         }
@@ -88,12 +102,11 @@ public sealed class CachedScannerService : IScannerQueries, IDisposable
         }
     }
 
-    /// <summary>
-    /// Clears the scanner list cache. Call this when the scanner configuration may have changed.
-    /// </summary>
+    /// <inheritdoc/>
     public void ClearScannerListCache()
     {
         _logger.LogDebug("Clearing scanner list cache");
+        Interlocked.Increment(ref _cacheGeneration);
         _cache.Remove(ScannerListCacheKey);
     }
 

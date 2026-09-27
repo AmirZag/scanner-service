@@ -9,7 +9,7 @@ public class ScannerServiceConfiguration
 
     // Device discovery budgets (see ScannerTimeouts in the Domain project for their meaning)
     public int DriverTimeoutMs { get; set; } = 15000;
-    public int EsclSearchTimeoutMs { get; set; } = 4000;
+    public int EsclSearchTimeoutMs { get; set; } = Domain.Common.ScannerConstants.Timeouts.DefaultEsclSearchTimeoutMs;
     public int EsclSearchMarginMs { get; set; } = 2000;
     public int DriverCooldownMs { get; set; } = 60000;
     public int DriverCooldownMaxMs { get; set; } = 600000;
@@ -18,6 +18,10 @@ public class ScannerServiceConfiguration
     public int ScanQueueTimeoutMs { get; set; } = 5000;
     public int ScanOverallTimeoutMs { get; set; } = 600000;
     public int ScanNoProgressTimeoutMs { get; set; } = 120000;
+
+    // Manually configured eSCL (driverless network) scanners; used when mDNS discovery cannot
+    // reach the device (UDP 5353 blocked, VLAN segmentation, WiFi client isolation)
+    public List<EsclManualDeviceConfiguration> EsclManualDevices { get; set; } = [];
 
     // Host shutdown grace period for in-flight requests (and scanner worker teardown)
     public int ShutdownTimeoutMs { get; set; } = 5000;

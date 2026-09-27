@@ -39,6 +39,7 @@ public class WebApiHostService : IDisposable
     private static readonly CompositeFormat WebApiStartedFormat = CompositeFormat.Parse("Web API started on port {0}");
     private static readonly CompositeFormat WebApiFailedFormat = CompositeFormat.Parse("Failed to start Web API: {0}");
     private static readonly CompositeFormat WebApiStopErrorFormat = CompositeFormat.Parse("Error stopping Web API: {0}");
+    private static readonly CompositeFormat ManualEsclDeviceLogFormat = CompositeFormat.Parse("{0} -> {1}");
 
     public bool IsRunning { get; private set; }
     public int ActualPort { get; private set; }
@@ -58,6 +59,11 @@ public class WebApiHostService : IDisposable
 
         try
         {
+            // eSCL network scanner discovery needs inbound UDP 5353 (mDNS) allowed for this executable;
+            // the default firewall policy silently drops the device's multicast answers. Adding the
+            // rule requires elevation; unelevated runs log the manual command instead.
+            NetworkDiscoveryFirewall.EnsureRule(Program.IsRunAsAdministrator());
+
             _cts = new CancellationTokenSource();
 
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -124,17 +130,31 @@ public class WebApiHostService : IDisposable
                     TimeSpan.FromSeconds(_config.ScanRequestTimeoutSeconds));
             });
 
+            // Manually configured eSCL devices: address-based, so they work even when mDNS discovery
+            // cannot reach the scanner (firewalled UDP 5353, VLAN segmentation, WiFi client isolation).
+            var manualEsclDevices = Configurations.ConfigurationValidator.NormalizeEsclManualDevices(_config.EsclManualDevices);
+            if (manualEsclDevices.Count > 0)
+            {
+                Log.Information("Configured {ManualEsclDeviceCount} manual eSCL device(s): {ManualEsclDevices}",
+                    manualEsclDevices.Count, string.Join("; ", manualEsclDevices.Select(d => string.Format(
+                        CultureInfo.InvariantCulture, ManualEsclDeviceLogFormat, d.Name, d.Address))));
+            }
+
+            builder.Services.AddSingleton<IReadOnlyList<Domain.Common.EsclManualDevice>>(manualEsclDevices);
+
             // Scanner services with proper lifetime management
             builder.Services.AddSingleton<Infrastructure.Services.ScannerInitializer>();
             builder.Services.AddSingleton<IScannerInitializer>(sp => sp.GetRequiredService<Infrastructure.Services.ScannerInitializer>());
             builder.Services.AddSingleton<Infrastructure.Services.ScannerService>();
-            builder.Services.AddSingleton<IScannerQueries>(sp =>
+            builder.Services.AddSingleton<Infrastructure.Services.CachedScannerService>(sp =>
             {
                 var scannerService = sp.GetRequiredService<Infrastructure.Services.ScannerService>();
                 var memoryCache = sp.GetRequiredService<IMemoryCache>();
                 var logger = sp.GetRequiredService<ILogger<Infrastructure.Services.CachedScannerService>>();
                 return new Infrastructure.Services.CachedScannerService(scannerService, memoryCache, logger);
             });
+            builder.Services.AddSingleton<IScannerQueries>(sp => sp.GetRequiredService<Infrastructure.Services.CachedScannerService>());
+            builder.Services.AddSingleton<IScannerListCache>(sp => sp.GetRequiredService<Infrastructure.Services.CachedScannerService>());
             builder.Services.AddSingleton<IScannerService>(sp => sp.GetRequiredService<Infrastructure.Services.ScannerService>());
             builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
             builder.Services.AddScoped<IExportSettingRepository, ExportSettingRepository>();

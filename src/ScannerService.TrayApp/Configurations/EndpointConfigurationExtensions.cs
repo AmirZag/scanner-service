@@ -105,6 +105,17 @@ public static class EndpointConfigurationExtensions
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status408RequestTimeout)
             .WithRequestTimeout(Domain.Common.ApplicationConstants.RequestTimeoutPolicies.Scanners);
+
+        // Device enumeration is expensive and its result is cached; clients must clear the cache after
+        // scanner or network configuration changes instead of waiting out the cache TTL.
+        app.MapPost("/api/scanners/refresh", (IScannerListCache cache) =>
+        {
+            cache.ClearScannerListCache();
+            return Results.Ok(new { message = "Scanner list cache cleared; the next request re-enumerates devices" });
+        })
+        .WithName("RefreshScanners")
+        .WithTags("Scanners")
+        .Produces(StatusCodes.Status200OK);
     }
 
     /// <summary>
@@ -185,7 +196,7 @@ public static class EndpointConfigurationExtensions
     /// </summary>
     public static void ConfigureScanEndpoints(this WebApplication app)
     {
-        app.MapPost("/api/scan", async (ScanRequestDto req, IScanJobService svc, IValidator<ScanRequestDto> validator, CancellationToken ct) =>
+        app.MapPost("/api/scan", async (ScanRequestDto req, IScanJobService svc, IValidator<ScanRequestDto> validator, HttpContext context, CancellationToken ct) =>
         {
             var validationResult = await validator.ValidateAsync(req, ct);
             if (!validationResult.IsValid)
@@ -201,6 +212,15 @@ public static class EndpointConfigurationExtensions
             }
 
             var scanResult = result.Value!;
+            // Multi-page scans stream a temporary aggregation zip that the job service tracks; delete
+            // it once the response has been sent. Files outside temp tracking (the exported scans in
+            // ExportPath) are deliberately kept - CleanupTempFile only touches tracked temp files.
+            context.Response.OnCompleted(() =>
+            {
+                svc.CleanupTempFile(scanResult.FilePath!);
+                return Task.CompletedTask;
+            });
+
             // Stream the file directly from disk using the path overload for proper disposal
             return Results.File(scanResult.FilePath!, scanResult.ContentType!, scanResult.FileName!);
         })

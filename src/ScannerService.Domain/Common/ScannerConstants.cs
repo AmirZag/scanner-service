@@ -72,8 +72,10 @@ public static class ScannerConstants
         /// <summary>Per-driver device enumeration budget (WIA/TWAIN).</summary>
         public const int DefaultDriverTimeoutMs = 15000;
 
-        /// <summary>ESCL mDNS search window; must stay below the ESCL driver budget.</summary>
-        public const int DefaultEsclSearchTimeoutMs = 4000;
+        /// <summary>ESCL mDNS search window; must stay below the ESCL driver budget. The eSCL discovery
+        /// re-queries the network at 0s, 1s, 2s, 4s..., so a longer window catches devices whose mDNS
+        /// responder is slow to answer (common on Wi-Fi connected scanners).</summary>
+        public const int DefaultEsclSearchTimeoutMs = 8000;
 
         /// <summary>Margin added on top of the ESCL search timeout.</summary>
         public const int EsclSearchMarginMs = 2000;

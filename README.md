@@ -9,6 +9,7 @@ A .NET 8 Windows scanner service with Clean Architecture, providing a REST API f
 - [Tech Stack](#tech-stack)
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
+- [Network Scanner Support (Driverless eSCL)](#network-scanner-support-driverless-escl)
 - [Development](#development)
 - [API Documentation](#api-documentation)
 - [Project Structure](#project-structure)
@@ -134,6 +135,82 @@ The application will:
 - **API Documentation**: http://localhost:58472/scalar
 - **OpenAPI Spec**: http://localhost:58472/openapi/openapi.json
 - **Health Check**: http://localhost:58472/api/health
+
+## Network Scanner Support (Driverless eSCL)
+
+Network scanners such as the **HP ScanJet Pro 4500 fn1** work **without any vendor driver** through the
+eSCL (AirScan) protocol. The app enumerates devices through the TWAIN, WIA, and eSCL drivers in
+parallel; only TWAIN and WIA need the manufacturer's driver package — **eSCL does not**, so a network
+scanner appears in `/api/scanners` with `"driver": "Escl"` even on a machine where no HP software is
+installed. Create a profile bound to that device's id and scan it like any other device.
+
+### Requirements for eSCL discovery
+
+eSCL devices advertise themselves over mDNS/DNS-SD (`_uscan._tcp` / `_uscans._tcp`, UDP 5353). For
+automatic discovery to work:
+
+1. **Windows Firewall must allow inbound UDP 5353 for the app executable.** The device's multicast
+   answers count as unsolicited inbound traffic and are dropped by the default policy. The app adds
+   this rule automatically when it runs as administrator; when it runs unelevated it logs the exact
+   `netsh` command to the log file. Manual command (as administrator):
+
+   ```
+   netsh advfirewall firewall add rule name="Resaa Scanner Service - mDNS discovery (UDP 5353)" dir=in action=allow protocol=UDP localport=5353 profile=any program="<install path>\ScannerService.TrayApp.exe"
+   ```
+
+2. **The scanner and this machine must be on the same subnet/VLAN.** mDNS is link-local multicast and
+   never crosses subnet boundaries (mDNS reflectors/gateways exist, but can break source-address
+   detection). This is the most common cause in segmented clinic networks.
+
+3. **The network profile must not be Public.** On the Public profile Windows aggressively blocks
+   discovery traffic.
+
+4. **The scanner's eSCL/Web Services features must be enabled** in its Embedded Web Server (browse to
+   `https://<scanner-ip>`, then *Networking → Advanced*: enable *WS-Discovery* / *WS-Scan*). If the
+   device still is not discovered after reconfiguring, HP's documented field fix for this model is a
+   firmware re-flash (e.g. v7.128) plus a factory reset in the EWS, then re-enabling those toggles.
+
+### Manual device configuration (no mDNS needed)
+
+When discovery cannot reach the scanner (blocked UDP 5353, segmented network, Wi-Fi client isolation),
+configure the device by address in `appsettings.json`; it always appears in `/api/scanners` and is
+scanned by connecting straight to that URL:
+
+```json
+"ScannerService": {
+  "EsclManualDevices": [
+    { "Name": "HP ScanJet Pro 4500 fn1", "Address": "192.168.1.50" },
+    { "Address": "http://192.168.1.51:8080/eSCL" }
+  ]
+}
+```
+
+- A bare host/IP uses HP's default endpoint `http://<host>:8080/eSCL`; a full eSCL root URL is used as-is
+  (bare IPv6 is not accepted — use the bracketed URL form, e.g. `http://[fe80::1]:8080/eSCL`).
+- `Name` is optional (defaults to the host). The device **id** is the full root URL — bind profiles to it.
+- When automatic discovery *and* the manual configuration both reach the same scanner, it appears twice
+  (discovered by UUID id, manual by URL id); either entry scans correctly — bind the profile to one.
+- Restart the app after changing this section, then `POST /api/scanners/refresh` to clear the device
+  list cache (or wait for the 30s TTL).
+
+### Verifying the scanner is reachable
+
+From Windows PowerShell (no installation needed):
+
+```powershell
+Test-NetConnection -ComputerName 192.168.1.50 -Port 8080
+Invoke-WebRequest http://192.168.1.50:8080/eSCL/ScannerCapabilities
+```
+
+If the second command returns XML, the eSCL endpoint is alive and the app can scan it (discovery or
+manual configuration are then purely a routing/firewall question).
+
+### What still requires the HP driver package
+
+TWAIN/WIA/ISIS scanning from the app's `Twain`/`Wia` devices, and the scanner's front-panel
+scan-to-PC feature, require the HP software. Driverless paths are: eSCL via this app (recommended),
+and Windows' inbox WSD scan driver (the device appears as a WIA "Web Services Device" when network
+discovery and the *Function Discovery* services are enabled — less reliable, not required here).
 
 ## Development
 
@@ -410,17 +487,22 @@ iscc Installer.iss
 
 ### Scanner Not Detected
 
-**Problem**: `/api/scanners` returns empty array
+**Problem**: `/api/scanners` returns empty array, or the network scanner is missing
 
 **Possible Causes**:
-1. Scanner drivers not installed
-2. TWAIN worker process not available
-3. Insufficient permissions
+1. USB scanner: manufacturer drivers not installed (TWAIN/WIA need them)
+2. Network scanner: firewall blocks inbound UDP 5353 (mDNS), or scanner is on a different subnet/VLAN,
+   or its eSCL/Web Services features are disabled in the device's own web settings
+3. TWAIN worker process not available
+4. Insufficient permissions
 
 **Solutions**:
-1. Install scanner manufacturer drivers
-2. Ensure application runs as Administrator
-3. Check logs in `%LOCALAPPDATA%\ResaaScanner\logs\`
+1. For network scanners see [Network Scanner Support (Driverless eSCL)](#network-scanner-support-driverless-escl) —
+   no vendor driver is needed; check the per-driver lines in the log (`Driver "Escl" enumerated 0 device(s) ...`),
+   add the firewall rule, or configure the device under `EsclManualDevices`
+2. For USB scanners, install the manufacturer drivers
+3. Ensure application runs as Administrator
+4. Check logs in `%LOCALAPPDATA%\ResaaScanner\logs\`
 
 ### Port Already in Use
 

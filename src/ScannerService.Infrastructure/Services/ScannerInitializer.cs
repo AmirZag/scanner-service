@@ -63,8 +63,24 @@ public sealed class ScannerInitializer : IScannerInitializer, IScannerInitialize
         // If a task is already in progress, just wait for it
         if (_initializationTask != null)
         {
-            await _initializationTask.ConfigureAwait(false);
-            return;
+            var inProgressTask = _initializationTask;
+            try
+            {
+                await inProgressTask.ConfigureAwait(false);
+                return;
+            }
+            catch (Exception)
+            {
+                // A faulted initialization must not be memoized: clear the slot (only if it still
+                // holds the task we awaited) so the next call retries instead of every future call
+                // rethrowing the same cached failure.
+                if (ReferenceEquals(_initializationTask, inProgressTask))
+                {
+                    _initializationTask = null;
+                }
+
+                throw;
+            }
         }
 
         // Acquire lock to create new initialization task
@@ -79,8 +95,23 @@ public sealed class ScannerInitializer : IScannerInitializer, IScannerInitialize
             }
 
             // Create the initialization task
-            _initializationTask = Task.Run(() => InitializeInternal(), cancellationToken);
-            await _initializationTask.ConfigureAwait(false);
+            var initializationTask = Task.Run(() => InitializeInternal(), cancellationToken);
+            _initializationTask = initializationTask;
+            try
+            {
+                await initializationTask.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Same rule as the early-wait path above: a faulted initialization must not stay
+                // memoized, or the very next caller would replay this failure without a retry.
+                if (ReferenceEquals(_initializationTask, initializationTask))
+                {
+                    _initializationTask = null;
+                }
+
+                throw;
+            }
         }
         finally
         {
@@ -106,7 +137,12 @@ public sealed class ScannerInitializer : IScannerInitializer, IScannerInitialize
                 ? new NAPS2.Images.Gdi.GdiImageContext()
                 : new NAPS2.Images.ImageSharp.ImageSharpImageContext();
 
-            _context = new ScanningContext(imageContext);
+            // Route NAPS2's internal diagnostics (eSCL discovery traces, driver errors) into our log;
+            // without this they go to a null logger and field troubleshooting is impossible.
+            _context = new ScanningContext(imageContext)
+            {
+                Logger = _logger
+            };
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {

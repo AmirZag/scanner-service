@@ -1,12 +1,20 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
+using ScannerService.Domain.Common;
 
 namespace ScannerService.TrayApp.Configurations;
 
 public static class ConfigurationValidator
 {
+    /// <summary>Format for the eSCL root URL assumed for bare host entries (HP's default endpoint).</summary>
+#pragma warning disable S5332 // Using http protocol is insecure - deliberate: eSCL device endpoints on the local network are plain http by design (e.g. http://192.168.1.50:8080/eSCL)
+    private static readonly CompositeFormat EsclRootUrlFormat = CompositeFormat.Parse("http://{0}:8080/eSCL");
+#pragma warning restore S5332
+
     public static (bool IsValid, List<string> Errors) ValidateScannerServiceConfiguration(ScannerServiceConfiguration config)
     {
         var errors = new List<string>();
@@ -52,9 +60,11 @@ public static class ConfigurationValidator
             errors.Add($"EsclSearchTimeoutMs must be between 500ms and DriverTimeoutMs ({config.DriverTimeoutMs}ms), got {config.EsclSearchTimeoutMs}");
         }
 
-        if (config.EsclSearchMarginMs < 0 || config.EsclSearchMarginMs > 10000)
+        // A zero margin would make the ESCL driver budget equal the internal mDNS search window, so the
+        // per-driver timeout could win the race at the boundary and (incorrectly) trigger a cool-down.
+        if (config.EsclSearchMarginMs < 500 || config.EsclSearchMarginMs > 10000)
         {
-            errors.Add($"EsclSearchMarginMs must be between 0ms and 10000ms, got {config.EsclSearchMarginMs}");
+            errors.Add($"EsclSearchMarginMs must be between 500ms and 10000ms, got {config.EsclSearchMarginMs}");
         }
 
         if (config.DriverCooldownMs < 5000 || config.DriverCooldownMs > 1800000)
@@ -100,7 +110,82 @@ public static class ConfigurationValidator
             errors.Add($"ScanRequestTimeoutSeconds must be greater than ScanOverallTimeoutMs + 30s ({config.ScanOverallTimeoutMs / 1000 + 30}s) and at most 7200s, got {config.ScanRequestTimeoutSeconds}s");
         }
 
+        // Validate manually configured eSCL devices
+        errors.AddRange(ValidateEsclManualDevices(config.EsclManualDevices).Errors);
+
         return (errors.Count == 0, errors);
+    }
+
+    /// <summary>
+    /// Validates the raw manually configured eSCL device entries: each needs a non-empty address that
+    /// is either a bare host name/IP or an absolute http(s) URL.
+    /// </summary>
+    public static (bool IsValid, List<string> Errors) ValidateEsclManualDevices(List<EsclManualDeviceConfiguration>? devices)
+    {
+        var errors = new List<string>();
+        if (devices == null)
+        {
+            return (true, errors);
+        }
+
+        for (int i = 0; i < devices.Count; i++)
+        {
+            var address = devices[i].Address;
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                errors.Add($"EsclManualDevices[{i}].Address cannot be empty");
+                continue;
+            }
+
+            bool isAbsoluteHttpUrl = Uri.TryCreate(address, UriKind.Absolute, out var uri) &&
+                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+            if (!isAbsoluteHttpUrl)
+            {
+                var hostType = Uri.CheckHostName(address);
+                if (hostType == UriHostNameType.Unknown)
+                {
+                    errors.Add($"EsclManualDevices[{i}].Address '{address}' is neither a valid host name/IP nor an absolute http(s) URL");
+                }
+                else if (hostType == UriHostNameType.IPv6)
+                {
+                    // An unbracketed IPv6 literal cannot be embedded into "http://{0}:8080/eSCL" (the
+                    // colon before the port makes the URI unparsable); require the bracketed URL form.
+                    errors.Add($"EsclManualDevices[{i}].Address '{address}' is a bare IPv6 address; use the full bracketed URL form instead, e.g. http://[fe80::1]:8080/eSCL");
+                }
+            }
+        }
+
+        return (errors.Count == 0, errors);
+    }
+
+    /// <summary>
+    /// Converts the raw manually configured eSCL device entries into normalized devices: the address
+    /// becomes the eSCL root URL (bare hosts get the HP default http://&lt;host&gt;:8080/eSCL) and the
+    /// name defaults to the host. Must only be called on entries that passed validation.
+    /// </summary>
+    public static List<EsclManualDevice> NormalizeEsclManualDevices(List<EsclManualDeviceConfiguration>? devices)
+    {
+        var result = new List<EsclManualDevice>();
+        if (devices == null)
+        {
+            return result;
+        }
+
+        foreach (var device in devices)
+        {
+            string rootUrl = Uri.TryCreate(device.Address, UriKind.Absolute, out var uri) &&
+                    (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+                ? uri.AbsoluteUri.TrimEnd('/')
+#pragma warning disable S5332 // Using http protocol is insecure - deliberate, see the EsclRootUrlFormat declaration
+                : string.Format(CultureInfo.InvariantCulture, EsclRootUrlFormat, device.Address.Trim());
+#pragma warning restore S5332
+
+            var host = Uri.TryCreate(rootUrl, UriKind.Absolute, out var parsedRootUrl) ? parsedRootUrl.Host : device.Address;
+            var name = string.IsNullOrWhiteSpace(device.Name) ? host : device.Name.Trim();
+            result.Add(new EsclManualDevice(name, rootUrl));
+        }
+
+        return result;
     }
 
     public static (bool IsValid, List<string> Errors) ValidateLoggingConfiguration(LoggingConfiguration config)

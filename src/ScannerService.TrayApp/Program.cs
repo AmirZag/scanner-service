@@ -21,7 +21,7 @@ internal static class Program
         System.Windows.Forms.Application.Run(trayApp);
     }
 
-    private static bool IsRunAsAdministrator()
+    internal static bool IsRunAsAdministrator()
     {
         try
         {

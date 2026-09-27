@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
@@ -10,7 +12,6 @@ using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Domain.Common;
-using System.Collections.Concurrent;
 
 namespace ScannerService.Infrastructure.Services;
 
@@ -18,6 +19,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 {
     private readonly IScannerInitializer _initializer;
     private readonly ScannerTimeouts _timeouts;
+    private readonly IReadOnlyList<EsclManualDevice> _manualEsclDevices;
     private readonly DriverHealthTracker _healthTracker;
     private readonly ILogger<ScannerService> _logger;
 
@@ -28,10 +30,15 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
     private readonly SemaphoreSlim _scanGate = new(1, 1);
     private readonly ConcurrentBag<string> _tempBitmapFiles = new();
 
-    public ScannerService(IScannerInitializer initializer, ScannerTimeouts timeouts, ILogger<ScannerService> logger)
+    public ScannerService(
+        IScannerInitializer initializer,
+        ScannerTimeouts timeouts,
+        IReadOnlyList<EsclManualDevice> manualEsclDevices,
+        ILogger<ScannerService> logger)
     {
         _initializer = initializer;
         _timeouts = timeouts;
+        _manualEsclDevices = manualEsclDevices;
         _healthTracker = new DriverHealthTracker(timeouts);
         _logger = logger;
     }
@@ -45,9 +52,17 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         var controller = ((IScannerInitializerContext)_initializer).Controller;
 
         // Each driver is queried with its own timeout budget; a hung driver is abandoned and skipped
-        // so the other drivers still contribute their devices.
+        // so the other drivers still contribute their devices. The per-driver count (including zero)
+        // is logged so an empty result from any single driver is visible in the field.
         var driverTasks = drivers
-            .Select(async driver => (Driver: driver, Devices: await QueryDriverDevicesAsync(driver, controller, cancellationToken)))
+            .Select(async driver =>
+            {
+                var stopwatch = Stopwatch.StartNew();
+                var devices = await QueryDriverDevicesAsync(driver, controller, cancellationToken);
+                _logger.LogInformation("Driver {Driver} enumerated {DeviceCount} device(s) in {ElapsedMs}ms",
+                    driver, devices.Count, stopwatch.ElapsedMilliseconds);
+                return (Driver: driver, Devices: devices);
+            })
             .ToList();
 
         var results = await Task.WhenAll(driverTasks);
@@ -58,8 +73,47 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             scanners.AddRange(devices.Select(d => new ScannerDto(d.ID, d.Name, driver.ToString())));
         }
 
+        AddManualEsclDevices(scanners);
+
         _logger.LogInformation("Found {TotalCount} total scanners across all drivers", scanners.Count);
         return scanners;
+    }
+
+    /// <summary>
+    /// Appends the manually configured eSCL devices to the list. These connect by address (no mDNS
+    /// required), so they must always appear even when network discovery cannot see them. Discovered
+    /// eSCL devices carry UUID ids, so a manual entry (a URL id) can never collide with one; when
+    /// discovery and the manual configuration both reach the same physical scanner it is deliberately
+    /// listed twice and each entry scans through its own path. The id check still de-duplicates
+    /// repeated manual entries pointing at the same address.
+    /// </summary>
+    private void AddManualEsclDevices(List<ScannerDto> scanners)
+    {
+        if (_manualEsclDevices.Count == 0)
+        {
+            return;
+        }
+
+        var knownIds = scanners.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var device in _manualEsclDevices)
+        {
+            if (knownIds.Add(device.Address))
+            {
+                scanners.Add(new ScannerDto(device.Address, device.Name, Driver.Escl.ToString()));
+                _logger.LogInformation("Added manual eSCL device {DeviceName} at {DeviceAddress}", device.Name, device.Address);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds the manually configured eSCL devices as NAPS2 scan devices. A device whose id is an
+    /// absolute http(s) URL is connected to directly by the eSCL driver, without any discovery.
+    /// </summary>
+    private List<ScanDevice> BuildManualEsclScanDevices()
+    {
+        return _manualEsclDevices
+            .Select(d => new ScanDevice(Driver.Escl, d.Address, d.Name))
+            .ToList();
     }
 
     public async Task<Result<List<string>>> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration, CancellationToken cancellationToken = default)
@@ -283,8 +337,10 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
                 try
                 {
                     var options = new ScanOptions { Driver = driver };
-                    options.EsclOptions ??= new EsclOptions();
-                    options.EsclOptions.SearchTimeout = _timeouts.EsclSearchTimeoutMs;
+                    if (driver == Driver.Escl)
+                    {
+                        options.EsclOptions = new EsclOptions { SearchTimeout = _timeouts.EsclSearchTimeoutMs };
+                    }
                     await foreach (var device in controller.GetDevices(options, linkedCts.Token))
                     {
                         devices.Enqueue(device);
@@ -478,6 +534,16 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 
     private async Task<ScanDevice?> FindDeviceAsync(string deviceId, ScanController controller, CancellationToken cancellationToken)
     {
+        // Network discovery cannot always see the device (firewalled UDP 5353, VLAN segmentation, WiFi
+        // client isolation), so the manually configured eSCL devices are checked first: the match is a
+        // plain id comparison and the driver connects to them directly by address.
+        var manualDevice = BuildManualEsclScanDevices().FirstOrDefault(d => d.ID == deviceId);
+        if (manualDevice != null)
+        {
+            _logger.LogInformation("Matched device id {DeviceId} to a manually configured eSCL device", deviceId);
+            return manualDevice;
+        }
+
         var drivers = ScannerDriverFactory.GetAvailableDrivers();
 
         // Bounded by the per-driver budgets in QueryDriverDevicesAsync; the drivers are queried in
