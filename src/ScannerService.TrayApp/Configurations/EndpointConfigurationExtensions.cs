@@ -15,6 +15,10 @@ namespace ScannerService.TrayApp.Configurations;
 /// </summary>
 public static class EndpointConfigurationExtensions
 {
+    /// <summary>Application version reported by the API: &lt;VersionPrefix&gt; from Directory.Build.props
+    /// plus the automatic git-commit-count revision appended at build time (e.g. "1.1.0.84").</summary>
+    private static readonly string ApiVersion =
+        (typeof(EndpointConfigurationExtensions).Assembly.GetName().Version ?? new Version(1, 0, 0)).ToString();
     /// <summary>
     /// Configures all API endpoints for the application.
     /// </summary>
@@ -35,7 +39,7 @@ public static class EndpointConfigurationExtensions
     {
         // Simple health check
         app.MapGet("/api/health", () =>
-            Results.Ok(new ApiHealthCheckDto(true, "1.0.0")))
+            Results.Ok(new ApiHealthCheckDto(true, ApiVersion)))
             .WithName("GetHealth")
             .WithTags("Health")
             .Produces<ApiHealthCheckDto>(StatusCodes.Status200OK);
@@ -73,8 +77,8 @@ public static class EndpointConfigurationExtensions
 
             var isHealthy = dependencies.Values.All(v => v);
             var result = isHealthy
-                ? DetailedApiHealthCheckDto.Healthy("1.0.0", dependencies, correlationId)
-                : DetailedApiHealthCheckDto.Unhealthy("1.0.0", dependencies, correlationId);
+                ? DetailedApiHealthCheckDto.Healthy(ApiVersion, dependencies, correlationId)
+                : DetailedApiHealthCheckDto.Unhealthy(ApiVersion, dependencies, correlationId);
 
             if (isHealthy)
             {

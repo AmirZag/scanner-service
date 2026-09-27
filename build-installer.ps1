@@ -29,7 +29,7 @@ dotnet publish src/ScannerService.TrayApp/ScannerService.TrayApp.csproj `
     --self-contained true `
     /p:PublishSingleFile=false `
     /p:PublishReadyToRun=true `
-    --output "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64"
+    --output "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`n❌ Publish failed!" -ForegroundColor Red
@@ -38,7 +38,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # Step 4: Remove PDB files (debug symbols) from publish output
 Write-Host "`n[4/5] Removing debug symbols..." -ForegroundColor Yellow
-Remove-Item -Path "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64\*.pdb" -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64\*.pdb" -Force -ErrorAction SilentlyContinue
 
 # Step 5: Create installer output directory
 Write-Host "`n[5/5] Creating installer..." -ForegroundColor Yellow

@@ -24,14 +24,14 @@ if errorlevel 1 goto :build_failed
 REM Step 3: Publish the TrayApp
 echo.
 echo [3/5] Publishing TrayApp...
-dotnet publish src/ScannerService.TrayApp/ScannerService.TrayApp.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=false /p:PublishReadyToRun=true --output "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64"
+dotnet publish src/ScannerService.TrayApp/ScannerService.TrayApp.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=false /p:PublishReadyToRun=true --output "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64"
 
 if errorlevel 1 goto :build_failed
 
 REM Step 4: Remove PDB files
 echo.
 echo [4/5] Removing debug symbols...
-del /q "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64\*.pdb" 2>nul
+del /q "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64\*.pdb" 2>nul
 
 REM Step 5: Create installer
 echo.
@@ -46,7 +46,9 @@ if exist "%ProgramFiles(x86)%\Inno Setup 5\ISCC.exe" set "ISCC_PATH=%ProgramFile
 if exist "%ProgramFiles%\Inno Setup 5\ISCC.exe" set "ISCC_PATH=%ProgramFiles%\Inno Setup 5\ISCC.exe"
 
 if defined ISCC_PATH (
-    echo Found Inno Setup at: %ISCC_PATH%
+    REM Quoted: %ISCC_PATH% expands during block parsing, and an unquoted "(x86)" in the
+    REM path would otherwise close this parenthesized block early ("\Inno was unexpected").
+    echo Found Inno Setup at: "%ISCC_PATH%"
     "%ISCC_PATH%" "Installer.iss"
 
     if errorlevel 1 goto :installer_failed

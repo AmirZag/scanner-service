@@ -211,11 +211,12 @@ public class ScanJobService : IScanJobService
             else
             {
                 var zipPath = Path.Combine(Path.GetTempPath(), $"scan_{Guid.NewGuid()}.zip");
-                ZipFile.CreateFromDirectory(
+                await ZipFile.CreateFromDirectoryAsync(
                     Path.GetDirectoryName(files[0])!,
                     zipPath,
                     CompressionLevel.Optimal,
-                    false);
+                    false,
+                    cancellationToken);
 
                 // Track for cleanup
                 lock (TempFilesToDelete)

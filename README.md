@@ -1,6 +1,6 @@
 # Resaa Scanner Service
 
-A .NET 8 Windows scanner service with Clean Architecture, providing a REST API for document scanning operations. This service runs as a system tray application and hosts a Web API for managing scanners, profiles, and scan operations.
+A .NET 10 Windows scanner service with Clean Architecture, providing a REST API for document scanning operations. This service runs as a system tray application and hosts a Web API for managing scanners, profiles, and scan operations.
 
 ## Table of Contents
 
@@ -56,7 +56,7 @@ ScannerService/
 ## Tech Stack
 
 ### Backend
-- **.NET 8** - Latest .NET platform
+- **.NET 10** - Latest .NET LTS platform
 - **C# 12** - Language features (nullable reference types, implicit usings)
 - **ASP.NET Core** - Web API framework
 - **Entity Framework Core 8** - ORM for database access
@@ -83,7 +83,7 @@ ScannerService/
 ## Prerequisites
 
 ### For Development
-- **.NET 8 SDK** - [Download here](https://dotnet.microsoft.com/download/dotnet/8.0)
+- **.NET 10 SDK** - [Download here](https://dotnet.microsoft.com/download/dotnet/10.0)
 - **Visual Studio 2022** or **JetBrains Rider** (recommended)
 - Windows 10/11 x64 operating system
 
@@ -429,7 +429,7 @@ dotnet publish src/ScannerService.TrayApp/ScannerService.TrayApp.csproj \
   --self-contained true \
   /p:PublishSingleFile=false \
   /p:PublishReadyToRun=true \
-  --output "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64"
+  --output "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64"
 ```
 
 **Output**: All required files in the specified output directory including:
@@ -482,6 +482,32 @@ iscc Installer.iss
 - **Auto-Startup**: Adds application to Windows startup
 - **Shortcuts**: Creates Start Menu and Desktop shortcuts
 - **Clean Uninstall**: Removes all files and registry entries
+
+## Versioning
+
+Versioning is **automatic** — you never number releases by hand. The base version is the
+`<VersionPrefix>` property in [`Directory.Build.props`](Directory.Build.props) (set once,
+e.g. `1.1.0`); at build time the **git commit count** is appended as the revision, so every
+release gets a unique, always-increasing version:
+
+```
+<VersionPrefix>.<commitCount>      e.g.  1.1.0.84  ->  1.1.0.85  ->  ...
+```
+
+Building the installer after committing new work is all it takes — the artifact is named
+`InstallerOutput/ResaaScannerSetup_1.1.0.85.exe` (the number is unique per commit, so identical
+code always produces the identical version). Optionally bump `VersionPrefix` (e.g. to `1.2.0`)
+when you want to signal a major/minor release.
+
+The version flows automatically to:
+
+| Where | How it gets the version |
+|---|---|
+| Every assembly & the exe (Explorer → Properties → Details) | `SetVersionFromGitCommitCount` target in `Directory.Build.props` |
+| `GET /api/health` and `/api/health/detailed` | `ApiVersion` in `EndpointConfigurationExtensions` |
+| OpenAPI document (`info.version`) | `AddOpenApiDocument` in `WebApiHostService` |
+| Installer version (Add/Remove Programs, upgrade detection) | `GetFileVersionString` in `Installer.iss` |
+| Installer file name (`InstallerOutput/ResaaScannerSetup_<version>.exe`) | `OutputBaseFilename` in `Installer.iss` |
 
 ## Troubleshooting
 

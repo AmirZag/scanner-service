@@ -1,13 +1,19 @@
+; Version is read from the published executable at compile time - the single source of truth is
+; the <Version> property in Directory.Build.props. Bump it there; never edit version strings here.
+; GetFileVersionString returns the version string exactly as set by the FileVersion MSBuild property.
+#define PublishDir "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64"
+#define MyAppVersion GetFileVersionString(PublishDir + "\ScannerService.TrayApp.exe")
+
 [Setup]
 AppName=Resaa Scanner Service
-AppVersion=1.0
-AppVerName=Resaa Scanner Service 1.0
+AppVersion={#MyAppVersion}
+AppVerName=Resaa Scanner Service {#MyAppVersion}
 AppPublisher=Resaa Softwares
 AppPublisherURL=https://github.com/Amirzag/scanner-service
 AppSupportURL=https://github.com/Amirzag/scanner-service/issues
 AppUpdatesURL=https://github.com/Amirzag/scanner-service/releases
 AppId={{8F3A2E1B-6C9D-4A2E-8B7D-1C3A5E7F9D2B}
-VersionInfoVersion=1.0.0.0
+VersionInfoVersion={#MyAppVersion}
 
 ; Prevent multiple instances of the installer from running
 AppMutex=Global\ResaaScannerInstallerMutex
@@ -31,7 +37,7 @@ UpdateUninstallLogAppName=yes
 DefaultDirName={localappdata}\ResaaScanner
 DefaultGroupName=Resaa Softwares
 OutputDir=InstallerOutput
-OutputBaseFilename=ResaaScannerSetup
+OutputBaseFilename=ResaaScannerSetup_{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 SetupIconFile=src\ScannerService.TrayApp\Properties\app.ico
@@ -62,16 +68,21 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "A
 
 [Files]
 ; Main application executable
-Source: "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64\ScannerService.TrayApp.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64\ScannerService.TrayApp.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+; Runtime configuration files - REQUIRED: without runtimeconfig.json the self-contained
+; apphost cannot start, and without deps.json assembly probing is incomplete
+Source: "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64\ScannerService.TrayApp.runtimeconfig.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64\ScannerService.TrayApp.deps.json"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Required DLL files (excluding PDB debug symbols)
-Source: "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64\*.dll"; DestDir: "{app}"; Flags: ignoreversion; Excludes: "*.pdb"
+Source: "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64\*.dll"; DestDir: "{app}"; Flags: ignoreversion; Excludes: "*.pdb"
 
 ; NAPS2 Worker executable (required for TWAIN scanning)
-Source: "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64\NAPS2.Worker.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64\NAPS2.Worker.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Configuration file
-Source: "src\ScannerService.TrayApp\bin\Release\net8.0-windows\publish\win-x64\appsettings.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "src\ScannerService.TrayApp\bin\Release\net10.0-windows\publish\win-x64\appsettings.json"; DestDir: "{app}"; Flags: ignoreversion
 
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 

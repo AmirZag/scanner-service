@@ -266,20 +266,9 @@ public class TrayApp : ApplicationContext
             running = _isActuallyRunning;
         }
 
-        if (_startMenuItem != null)
-        {
-            _startMenuItem.Enabled = !running;
-        }
-
-        if (_stopMenuItem != null)
-        {
-            _stopMenuItem.Enabled = running;
-        }
-
-        if (_apiDocsMenuItem != null)
-        {
-            _apiDocsMenuItem.Enabled = running;
-        }
+        _startMenuItem?.Enabled = !running;
+        _stopMenuItem?.Enabled = running;
+        _apiDocsMenuItem?.Enabled = running;
     }
 
     private void OnStatusCheckTimerTick(object? sender, EventArgs e)
@@ -329,20 +318,9 @@ public class TrayApp : ApplicationContext
                 _statusItem.ForeColor = running ? Color.Green : Color.Red;
             }
 
-            if (_startMenuItem != null)
-            {
-                _startMenuItem.Enabled = !running;
-            }
-
-            if (_stopMenuItem != null)
-            {
-                _stopMenuItem.Enabled = running;
-            }
-
-            if (_apiDocsMenuItem != null)
-            {
-                _apiDocsMenuItem.Enabled = running;
-            }
+            _startMenuItem?.Enabled = !running;
+            _stopMenuItem?.Enabled = running;
+            _apiDocsMenuItem?.Enabled = running;
 
             if (!_isDisposed && _icon != null)
             {

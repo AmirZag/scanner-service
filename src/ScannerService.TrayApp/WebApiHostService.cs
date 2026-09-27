@@ -169,9 +169,10 @@ public class WebApiHostService : IDisposable
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddOpenApiDocument(config =>
             {
+                var apiVersion = typeof(Program).Assembly.GetName().Version ?? new Version(1, 0, 0);
                 config.DocumentName = "openapi";
                 config.Title = "Scanner Service API";
-                config.Version = "v1.0.0";
+                config.Version = $"v{apiVersion}";
                 config.Description = "API for managing scanners, profiles, and scanning operations";
             });
 
@@ -255,6 +256,18 @@ public class WebApiHostService : IDisposable
             });
 
             _app.UseCors();
+
+            // The Scalar UI shell must never be cached: its asset layout changes between package
+            // versions, and a stale cached shell renders as a blank page in the browser.
+            _app.Use(async (context, next) =>
+            {
+                if (context.Request.Path.StartsWithSegments("/scalar"))
+                {
+                    context.Response.Headers.CacheControl = "no-store";
+                }
+
+                await next();
+            });
 
             _app.ConfigureAllEndpoints();
 
