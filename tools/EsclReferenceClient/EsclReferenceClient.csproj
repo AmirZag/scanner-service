@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0-windows</TargetFramework>
+		<!-- Standalone reference implementation of a minimal eSCL scan agent (not part of the main
+		     solution). Built on demand to study/test the eSCL protocol against tools/EsclDeviceSimulator
+		     or a real network scanner. Like EsclDeviceSimulator it manages its own dependency versions
+		     and deliberately relaxes the production analyzer strictness. -->
+		<ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+		<TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+		<CodeAnalysisTreatWarningsAsErrors>false</CodeAnalysisTreatWarningsAsErrors>
+		<AnalysisMode>Default</AnalysisMode>
+		<EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+		<NoWarn>$(NoWarn);CA1303;CA2000;CA2008;CA1305</NoWarn>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- Not needed for a test tool and would have no CPM version here -->
+		<PackageReference Remove="SonarAnalyzer.CSharp" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- Pure managed mDNS (no Bonjour install needed on Windows); browses _uscan._tcp -->
+		<PackageReference Include="Zeroconf" Version="3.7.16" />
+	</ItemGroup>
+
+</Project>
