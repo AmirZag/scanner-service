@@ -32,11 +32,15 @@ public class WebApiHostService : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _runTask;
     private readonly ScannerServiceConfiguration _config;
+
+    // Resolved once per start; drives the port probe, the Kestrel bind, the beyond-loopback warning
+    // and the local URL host. A field (not a local) so the start-failure catch blocks can read it.
+    private ApiBindTarget _bindTarget = ParseApiHost("localhost");
     private readonly SemaphoreSlim _stopGate = new(1, 1);
     private bool _isDisposed;
 
     private static readonly CompositeFormat DataSourceFormat = CompositeFormat.Parse("Data Source={0}");
-    private static readonly CompositeFormat WebApiStartedFormat = CompositeFormat.Parse("Web API started on port {0}");
+    private static readonly CompositeFormat WebApiStartedFormat = CompositeFormat.Parse("Web API started on {0}:{1}");
     private static readonly CompositeFormat WebApiFailedFormat = CompositeFormat.Parse("Failed to start Web API: {0}");
     private static readonly CompositeFormat WebApiStopErrorFormat = CompositeFormat.Parse("Error stopping Web API: {0}");
     private static readonly CompositeFormat ManualEsclDeviceLogFormat = CompositeFormat.Parse("{0} -> {1}");
@@ -44,10 +48,18 @@ public class WebApiHostService : IDisposable
     public bool IsRunning { get; private set; }
     public int ActualPort { get; private set; }
 
+    /// <summary>
+    /// Host spliced into locally-constructed URLs (health poll, API docs): "localhost" for loopback
+    /// and wildcard binds (those always cover loopback), the literal IP (bracketed when IPv6) for a
+    /// specific-address bind.
+    /// </summary>
+    public string LocalUrlHost { get; private set; }
+
     public WebApiHostService(ScannerServiceConfiguration config)
     {
         _config = config;
         ActualPort = config.ApiPort;
+        LocalUrlHost = ParseApiHost(config.ApiHost).UrlHost;
     }
 
     public async Task StartAsync()
@@ -65,6 +77,7 @@ public class WebApiHostService : IDisposable
             NetworkDiscoveryFirewall.EnsureRule(Program.IsRunAsAdministrator());
 
             _cts = new CancellationTokenSource();
+            _bindTarget = ParseApiHost(_config.ApiHost);
 
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
@@ -84,16 +97,42 @@ public class WebApiHostService : IDisposable
             SerilogConfigurationExtensions.InitializeSerilog(loggingConfig, AppContext.BaseDirectory);
             builder.Host.UseSerilog();
 
-            var availablePort = await FindAvailablePortAsync(_config.ApiPort);
+            var availablePort = await FindAvailablePortAsync(_config.ApiPort, _bindTarget.ProbeAddress);
             if (availablePort != _config.ApiPort)
             {
                 Log.Warning("Requested port {RequestedPort} is in use, using alternative port {AvailablePort}", _config.ApiPort, availablePort);
             }
             ActualPort = availablePort;
+            LocalUrlHost = _bindTarget.UrlHost;
+
+            // Binding beyond loopback exposes the unauthenticated API to the network; make sure this
+            // is a deliberate choice (loud warning) and that the firewall lets remote clients through.
+            if (_bindTarget.BindsBeyondLoopback)
+            {
+                ApiFirewallRuleOutcome firewallOutcome = ApiListenerFirewall.EnsureRule(Program.IsRunAsAdministrator());
+                Log.Warning(
+                    "SECURITY: the Web API is listening beyond loopback ({BindDescription}, port {Port}) because ScannerService:ApiHost is '{ApiHost}'. "
+                    + "The API has NO authentication and allows any origin, so every device that can reach this machine can read profiles and start scans. "
+                    + "Windows Firewall rule status: {FirewallOutcome}; if the rule was not created and remote clients cannot connect, add an inbound TCP allow rule for this executable (run the app once as administrator, or use the netsh command logged above when a rule was attempted). "
+                    + "Set ApiHost back to \"localhost\" in appsettings.json to restrict access.",
+                    _bindTarget.BindDescription, ActualPort, _config.ApiHost, firewallOutcome);
+            }
 
             builder.WebHost.ConfigureKestrel(options =>
             {
-                options.ListenLocalhost(ActualPort);
+                if (_bindTarget.Kind == ApiBindKind.Loopback)
+                {
+                    options.ListenLocalhost(ActualPort);
+                }
+                else if (_bindTarget.Kind == ApiBindKind.AnyIp)
+                {
+                    options.ListenAnyIP(ActualPort);
+                }
+                else
+                {
+                    options.Listen(_bindTarget.Address!, ActualPort);
+                }
+
                 // Limit max request body size to 100 MB
                 options.Limits.MaxRequestBodySize = 104857600; // 100 MB
             });
@@ -274,23 +313,39 @@ public class WebApiHostService : IDisposable
             _runTask = _app.RunAsync(_cts?.Token ?? CancellationToken.None);
             IsRunning = true;
 
-            Log.Information("Scanner Service API started successfully on port {ActualPort} (requested: {RequestedPort})", ActualPort, _config.ApiPort);
-            Debug.WriteLine(string.Format(CultureInfo.InvariantCulture, WebApiStartedFormat, ActualPort));
+            Log.Information("Scanner Service API started successfully listening on {BindDescription}, port {ActualPort} (requested: {RequestedPort})", _bindTarget.BindDescription, ActualPort, _config.ApiPort);
+            Debug.WriteLine(string.Format(CultureInfo.InvariantCulture, WebApiStartedFormat, LocalUrlHost, ActualPort));
         }
         catch (IOException ex) when (ex.InnerException is Microsoft.AspNetCore.Connections.AddressInUseException)
         {
             Log.Error(ex,
-                "Port {Port} is already in use. Please close any other instances of the application or change the port in appsettings.json",
+                "Cannot bind {BindDescription} on port {Port}; the address/port is already in use. Please close any other instance of the application or change ApiHost/ApiPort in appsettings.json",
+                _bindTarget.BindDescription,
                 ActualPort);
 
             throw new InvalidOperationException(
                 string.Format(CultureInfo.InvariantCulture,
-                    "Port {0} is already in use. Please close other instances or change the port.", ActualPort),
+                    "Address {0} on port {1} is already in use. Please close other instances or change ApiHost/ApiPort in appsettings.json.",
+                    _bindTarget.BindDescription,
+                    ActualPort),
+                ex);
+        }
+        catch (Exception ex) when (IsAddressNotAvailable(ex))
+        {
+            Log.Error(ex,
+                "Cannot bind {BindDescription}: the address is not assigned to any network adapter on this machine. "
+                + "Pick an address shown by \"ipconfig\" or use \"*\" to listen on all interfaces (ScannerService:ApiHost in appsettings.json)",
+                _bindTarget.BindDescription);
+
+            throw new InvalidOperationException(
+                string.Format(CultureInfo.InvariantCulture,
+                    "ApiHost '{0}' is not assigned to any network adapter on this machine. Use an address shown by ipconfig or \"*\" in appsettings.json.",
+                    _config.ApiHost),
                 ex);
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Failed to start Web API on port {ActualPort}", ActualPort);
+            Log.Error(ex, "Failed to start Web API binding {BindDescription} (port {ActualPort})", _bindTarget.BindDescription, ActualPort);
             Debug.WriteLine(string.Format(CultureInfo.InvariantCulture, WebApiFailedFormat, ex.Message));
             await StopAsync();
             throw;
@@ -389,7 +444,7 @@ public class WebApiHostService : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static Task<int> FindAvailablePortAsync(int startPort)
+    private static Task<int> FindAvailablePortAsync(int startPort, IPAddress bindAddress)
     {
         // Get actively used TCP ports to avoid checking them
         var usedPorts = new HashSet<int>();
@@ -399,7 +454,7 @@ public class WebApiHostService : IDisposable
             var tcpConnections = System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners();
             foreach (var listener in tcpConnections)
             {
-                if (listener.Address.Equals(IPAddress.Loopback) || listener.Address.Equals(IPAddress.Any))
+                if (IsConflictingListener(listener, bindAddress))
                 {
                     usedPorts.Add(listener.Port);
                 }
@@ -411,7 +466,7 @@ public class WebApiHostService : IDisposable
         }
 
         // Try the requested port first
-        if (!usedPorts.Contains(startPort) && IsPortAvailable(startPort))
+        if (!usedPorts.Contains(startPort) && IsPortAvailable(startPort, bindAddress))
         {
             return Task.FromResult(startPort);
         }
@@ -420,25 +475,25 @@ public class WebApiHostService : IDisposable
         var maxSearch = startPort + Domain.Common.ApplicationConstants.Ports.MaxPortSearchRange;
         for (int port = startPort + 1; port <= maxSearch; port++)
         {
-            if (!usedPorts.Contains(port) && IsPortAvailable(port))
+            if (!usedPorts.Contains(port) && IsPortAvailable(port, bindAddress))
             {
                 return Task.FromResult(port);
             }
         }
 
         // If no port found in that range, try any available port
-        using var tempListener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        using var tempListener = new System.Net.Sockets.TcpListener(bindAddress, 0);
         tempListener.Start();
         var availablePort = ((IPEndPoint)tempListener.LocalEndpoint).Port;
         tempListener.Stop();
         return Task.FromResult(availablePort);
     }
 
-    private static bool IsPortAvailable(int port)
+    private static bool IsPortAvailable(int port, IPAddress bindAddress)
     {
         try
         {
-            using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, port);
+            using var listener = new System.Net.Sockets.TcpListener(bindAddress, port);
             listener.Start();
             listener.Stop();
             return true;
@@ -447,6 +502,114 @@ public class WebApiHostService : IDisposable
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// True when an existing listener blocks binding <paramref name="bindAddress"/> on its port: a
+    /// wildcard listener occupies the port for every address, a listener on the bind address
+    /// conflicts directly, and a wildcard bind conflicts with any existing listener. For the
+    /// loopback bind this reduces to "loopback or wildcard", matching the historical behavior.
+    /// </summary>
+    private static bool IsConflictingListener(System.Net.IPEndPoint listener, IPAddress bindAddress)
+    {
+        return listener.Address.Equals(IPAddress.Any)
+            || listener.Address.Equals(bindAddress)
+            || bindAddress.Equals(IPAddress.Any);
+    }
+
+    /// <summary>
+    /// True when the exception chain contains a SocketException with SocketError.AddressNotAvailable
+    /// (the configured address is not assigned to any network adapter). Kestrel surfaces bind
+    /// failures as an IOException wrapping the socket error, while the port probe fails with a raw
+    /// SocketException - both shapes must be recognized.
+    /// </summary>
+    private static bool IsAddressNotAvailable(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is System.Net.Sockets.SocketException socketException
+                && socketException.SocketErrorCode == System.Net.Sockets.SocketError.AddressNotAvailable)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Kind of address the Web API binds to, resolved from ScannerService:ApiHost.</summary>
+    private enum ApiBindKind
+    {
+        /// <summary>Loopback only (127.0.0.1 and [::1]).</summary>
+        Loopback,
+        /// <summary>All network interfaces (wildcard value).</summary>
+        AnyIp,
+        /// <summary>One specific IP address literal.</summary>
+        SpecificAddress
+    }
+
+    /// <summary>
+    /// The resolved bind decision: which kind of address to bind, the address itself, the host
+    /// string for locally-constructed URLs, and a human-readable description for logs and errors.
+    /// </summary>
+    /// <param name="Kind">The kind of bind.</param>
+    /// <param name="Address">The specific IP address; only set for <see cref="ApiBindKind.SpecificAddress"/>.</param>
+    /// <param name="UrlHost">Host for locally-constructed URLs: "localhost" for loopback and wildcard binds (those always cover loopback), otherwise the IP literal (bracketed when IPv6).</param>
+    /// <param name="BindDescription">Human-readable description of the bind for logs and error messages.</param>
+    private sealed record ApiBindTarget(ApiBindKind Kind, IPAddress? Address, string UrlHost, string BindDescription)
+    {
+        /// <summary>Address the port-availability probe must bind: loopback for the default, the wildcard for all-interfaces, the literal otherwise.</summary>
+        public IPAddress ProbeAddress => Kind switch
+        {
+            ApiBindKind.Loopback => IPAddress.Loopback,
+            ApiBindKind.AnyIp => IPAddress.Any,
+            _ => Address ?? IPAddress.Loopback
+        };
+
+        /// <summary>True when the bind reaches beyond loopback and exposes the (unauthenticated) API to the network.</summary>
+        public bool BindsBeyondLoopback => Kind == ApiBindKind.AnyIp
+            || Kind == ApiBindKind.SpecificAddress && Address is not null && !IPAddress.IsLoopback(Address);
+    }
+
+    /// <summary>
+    /// Resolves the ScannerService:ApiHost value into a bind target. Values approved by the
+    /// configuration validator always parse here; anything unknown falls back to the loopback
+    /// target so an unvalidated or stale config can never crash host construction.
+    /// </summary>
+    private static ApiBindTarget ParseApiHost(string? apiHost)
+    {
+        string candidate = (apiHost ?? string.Empty).Trim();
+
+        if (candidate.Length == 0
+            || string.Equals(candidate, "localhost", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(candidate, "loopback", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ApiBindTarget(ApiBindKind.Loopback, null, "localhost", "localhost (127.0.0.1, [::1])");
+        }
+
+        if (string.Equals(candidate, "*", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(candidate, "+", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(candidate, "any", StringComparison.OrdinalIgnoreCase)
+            || candidate == "0.0.0.0"
+            || candidate == "::")
+        {
+            return new ApiBindTarget(ApiBindKind.AnyIp, null, "localhost", "all interfaces (*)");
+        }
+
+        // The parse must round-trip the exact text so abbreviated forms ("0" -> 0.0.0.0,
+        // "192.168.1" -> 192.168.0.1) can never silently bind a different address than typed.
+        if (IPAddress.TryParse(candidate, out IPAddress? address)
+            && string.Equals(address.ToString(), candidate, StringComparison.OrdinalIgnoreCase))
+        {
+            string urlHost = address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+                ? "[" + address + "]"
+                : address.ToString();
+            return new ApiBindTarget(ApiBindKind.SpecificAddress, address, urlHost, "IP address " + urlHost);
+        }
+
+        // Defensive fallback: the configuration validator rejects DNS names and other invalid
+        // values before the host is constructed, so this only triggers for unvalidated callers.
+        return new ApiBindTarget(ApiBindKind.Loopback, null, "localhost", "localhost (127.0.0.1, [::1])");
     }
 
     /// <summary>

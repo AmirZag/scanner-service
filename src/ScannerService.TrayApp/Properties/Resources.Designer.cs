@@ -251,7 +251,7 @@ namespace ScannerService.TrayApp.Properties {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to ● اسکنر فعال است - localhost:{0}.
+        ///   Looks up a localized string similar to ● اسکنر فعال است - {0}:{1}.
         /// </summary>
         internal static string StatusRunningPersianFormat {
             get {

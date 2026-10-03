@@ -182,7 +182,7 @@
     <value>● اسکنر غیرفعال است</value>
   </data>
   <data name="StatusRunningPersianFormat" xml:space="preserve">
-    <value>● اسکنر فعال است - localhost:{0}</value>
+    <value>● اسکنر فعال است - {0}:{1}</value>
   </data>
   <data name="StatusStoppedPersian" xml:space="preserve">
     <value>● اسکنر متوقف شده</value>

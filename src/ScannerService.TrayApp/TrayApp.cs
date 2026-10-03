@@ -46,8 +46,10 @@ public class TrayApp : ApplicationContext
     private string _apiHealthUrl;
 
     private static readonly CompositeFormat StatusRunningFormat = CompositeFormat.Parse(Resources.StatusRunningPersianFormat);
-    private static readonly CompositeFormat ApiUrlFormat = CompositeFormat.Parse("http://localhost:{0}/api/health");
-    private static readonly CompositeFormat ScalarUrlFormat = CompositeFormat.Parse("http://localhost:{0}/scalar/openapi");
+#pragma warning disable S5332 // Using http protocol is insecure - deliberate: the local Web API serves plain http by design and the host comes from config at runtime
+    private static readonly CompositeFormat ApiUrlFormat = CompositeFormat.Parse("http://{0}:{1}/api/health");
+    private static readonly CompositeFormat ScalarUrlFormat = CompositeFormat.Parse("http://{0}:{1}/scalar/openapi");
+#pragma warning restore S5332
     private static readonly CompositeFormat FailedToOpenApiDocsFormat = CompositeFormat.Parse(Resources.FailedToOpenApiDocsFormat);
     private static readonly CompositeFormat FailedToStartServiceFormat = CompositeFormat.Parse(Resources.FailedToStartServiceFormat);
     private static readonly CompositeFormat FailedToStopServiceFormat = CompositeFormat.Parse(Resources.FailedToStopServiceFormat);
@@ -86,9 +88,6 @@ public class TrayApp : ApplicationContext
             throw new InvalidOperationException("Configuration validation failed: " + string.Join("; ", validation.Errors));
         }
 
-        // Note: Actual port will be updated when WebApiHostService starts
-        _apiHealthUrl = string.Format(CultureInfo.InvariantCulture, ApiUrlFormat, _config.ApiPort);
-
         _syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
         // Create HttpClientFactory for proper HttpClient lifecycle management
@@ -101,6 +100,9 @@ public class TrayApp : ApplicationContext
         _httpClientFactory = _httpClientServiceProvider.GetService<IHttpClientFactory>()!;
 
         _webApiHost = new WebApiHostService(_config);
+
+        // Note: Actual host/port will be updated when WebApiHostService starts
+        _apiHealthUrl = string.Format(CultureInfo.InvariantCulture, ApiUrlFormat, _webApiHost.LocalUrlHost, _config.ApiPort);
 
         _icon = new NotifyIcon
         {
@@ -240,7 +242,7 @@ public class TrayApp : ApplicationContext
 
         try
         {
-            var url = string.Format(CultureInfo.InvariantCulture, ScalarUrlFormat, _webApiHost.ActualPort);
+            var url = string.Format(CultureInfo.InvariantCulture, ScalarUrlFormat, _webApiHost.LocalUrlHost, _webApiHost.ActualPort);
             Process.Start(new ProcessStartInfo
             {
                 FileName = url,
@@ -313,7 +315,7 @@ public class TrayApp : ApplicationContext
             if (_statusItem != null)
             {
                 _statusItem.Text = running
-                    ? string.Format(CultureInfo.CurrentCulture, StatusRunningFormat, _webApiHost.ActualPort)
+                    ? string.Format(CultureInfo.CurrentCulture, StatusRunningFormat, _webApiHost.LocalUrlHost, _webApiHost.ActualPort)
                     : Resources.StatusInactivePersian;
                 _statusItem.ForeColor = running ? Color.Green : Color.Red;
             }
@@ -361,7 +363,7 @@ public class TrayApp : ApplicationContext
                 // Update the API health URL with the actual port used
                 _syncContext.Post(_ =>
                 {
-                    _apiHealthUrl = string.Format(CultureInfo.InvariantCulture, ApiUrlFormat, _webApiHost.ActualPort);
+                    _apiHealthUrl = string.Format(CultureInfo.InvariantCulture, ApiUrlFormat, _webApiHost.LocalUrlHost, _webApiHost.ActualPort);
                     ShowNotification(Resources.ServiceStartedText, ToolTipIcon.Info);
                 }, null);
 

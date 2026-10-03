@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Text;
 using ScannerService.Domain.Common;
 
@@ -29,6 +30,26 @@ public static class ConfigurationValidator
         if (config.ApiPort < 1024 || config.ApiPort > 65535)
         {
             errors.Add($"ApiPort must be between 1024 and 65535, got {config.ApiPort}");
+        }
+
+        // Validate the API bind host. Empty means the "localhost" default; DNS host names and
+        // abbreviated IP forms are rejected (the parse must round-trip the exact text, so "0" or
+        // "192.168.1" fail instead of silently reinterpreting the address) - a typo can then never
+        // silently widen the API's network exposure.
+        string apiHost = config.ApiHost?.Trim() ?? string.Empty;
+        bool isLoopbackToken = apiHost.Length == 0
+            || string.Equals(apiHost, "localhost", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(apiHost, "loopback", StringComparison.OrdinalIgnoreCase);
+        bool isWildcardToken = string.Equals(apiHost, "*", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(apiHost, "+", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(apiHost, "any", StringComparison.OrdinalIgnoreCase)
+            || apiHost == "0.0.0.0"
+            || apiHost == "::";
+        bool isCanonicalIpLiteral = IPAddress.TryParse(apiHost, out IPAddress? parsedApiHost)
+            && string.Equals(parsedApiHost.ToString(), apiHost, StringComparison.OrdinalIgnoreCase);
+        if (!isLoopbackToken && !isWildcardToken && !isCanonicalIpLiteral)
+        {
+            errors.Add($"ApiHost '{config.ApiHost}' is not a valid bind address. Use \"localhost\", a wildcard (\"*\", \"+\", \"any\", \"0.0.0.0\", \"::\"), or a full IP address literal (e.g. \"192.168.1.50\"); DNS host names and abbreviated addresses are not supported");
         }
 
         // Validate StatusCheckInterval

@@ -3,6 +3,14 @@ namespace ScannerService.TrayApp.Configurations;
 public class ScannerServiceConfiguration
 {
     public int ApiPort { get; set; } = 58472;
+
+    /// <summary>
+    /// Address the Web API binds: "localhost" (default), a wildcard ("*", "+", "any", "0.0.0.0", "::")
+    /// for all interfaces, or an IP address literal. DNS host names are rejected. Binding beyond
+    /// loopback exposes the unauthenticated API to the network (a warning is logged and a firewall
+    /// rule is ensured).
+    /// </summary>
+    public string ApiHost { get; set; } = "localhost";
     public int StatusCheckInterval { get; set; } = 5000;
     public int HttpTimeout { get; set; } = 2000;
     public int StartupDelay { get; set; } = 2000;

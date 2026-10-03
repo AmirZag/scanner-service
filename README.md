@@ -390,6 +390,7 @@ Configuration is managed through `appsettings.json`:
 {
   "ScannerService": {
     "ApiPort": 58472,               // Web API port
+    "ApiHost": "localhost",         // Bind address: "localhost" (default), wildcard "*", or an IP address
     "StatusCheckInterval": 5000,    // Tray app status check interval (ms)
     "HttpTimeout": 2000,            // HTTP timeout (ms)
     "StartupDelay": 2000            // Startup delay (ms)
@@ -411,6 +412,16 @@ Configuration is managed through `appsettings.json`:
   }
 }
 ```
+
+### API Bind Address (`ApiHost`)
+
+`ApiHost` controls which network address the Web API listens on. Accepted values (case-insensitive):
+
+- `localhost` or `loopback` (default) — loopback only (`127.0.0.1` + `[::1]`); only this machine can connect.
+- `*`, `+`, `any`, `0.0.0.0`, or `::` — all network interfaces; other devices on the network can connect.
+- Any IP address literal (e.g. `192.168.1.50`, `::1`) — binds that address only. DNS host names are rejected at startup.
+
+> **Security note:** the API has **no authentication**. Binding beyond loopback (`*` or an IP) exposes scanner control and scanned documents to every device that can reach the machine — a loud warning is logged at startup. The app then also ensures an inbound firewall rule (`Resaa Scanner Service - Web API (TCP)`, program-scoped): automatically when running elevated, otherwise via a single UAC prompt (declining it logs the exact `netsh` command to run manually). The tray status and API-docs URLs follow the configured bind. Restart the app after changing the value.
 
 ### Configuration Classes
 
