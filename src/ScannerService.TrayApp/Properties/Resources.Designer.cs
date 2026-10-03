@@ -195,7 +195,25 @@ namespace ScannerService.TrayApp.Properties {
                 return ResourceManager.GetString("ServiceStartedText", resourceCulture);
             }
         }
-        
+
+        /// <summary>
+        ///   Looks up a localized string similar to تنظیمات ذخیره شد و سرویس با مقادیر جدید راه‌اندازی مجدد شد.
+        /// </summary>
+        internal static string SettingsAppliedText {
+            get {
+                return ResourceManager.GetString("SettingsAppliedText", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to تنظیمات ذخیره‌شده نامعتبر است؛ سرویس با تنظیمات فعلی به کار خود ادامه می‌دهد.
+        /// </summary>
+        internal static string SettingsInvalidRevertedText {
+            get {
+                return ResourceManager.GetString("SettingsInvalidRevertedText", resourceCulture);
+            }
+        }
+
         /// <summary>
         ///   Looks up a localized string similar to متوقف شده.
         /// </summary>

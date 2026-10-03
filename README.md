@@ -173,8 +173,11 @@ automatic discovery to work:
 ### Manual device configuration (no mDNS needed)
 
 When discovery cannot reach the scanner (blocked UDP 5353, segmented network, Wi-Fi client isolation),
-configure the device by address in `appsettings.json`; it always appears in `/api/scanners` and is
-scanned by connecting straight to that URL:
+configure the device by address. The preferred path is the settings API
+(`PUT /api/settings` with an `esclManualDevices` array — see [API Documentation](#api-documentation));
+it validates, persists to `appsettings.local.json`, and restarts the API host automatically so the
+device appears in `/api/scanners` without touching any file. Editing `appsettings.json` by hand
+remains possible for headless/first-boot setups:
 
 ```json
 "ScannerService": {
@@ -190,8 +193,8 @@ scanned by connecting straight to that URL:
 - `Name` is optional (defaults to the host). The device **id** is the full root URL — bind profiles to it.
 - When automatic discovery *and* the manual configuration both reach the same scanner, it appears twice
   (discovered by UUID id, manual by URL id); either entry scans correctly — bind the profile to one.
-- Restart the app after changing this section, then `POST /api/scanners/refresh` to clear the device
-  list cache (or wait for the 30s TTL).
+- Restart the app after changing this section by hand (API-made changes apply themselves);
+  `POST /api/scanners/refresh` clears the device list cache (or wait for the 30s TTL).
 
 ### Verifying the scanner is reachable
 
@@ -275,6 +278,20 @@ The service provides a RESTful API with the following endpoints:
 |--------|----------|-------------|
 | GET | `/api/export-settings` | Get export configuration |
 | PUT | `/api/export-settings` | Update export configuration |
+
+### Settings (ScannerService configuration)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/settings` | The current settings (flat JSON, same shape as the PUT body) |
+| PUT | `/api/settings` | Full replacement: send every field; validates, persists to `appsettings.local.json`, auto-restarts the API host |
+| DELETE | `/api/settings/overrides` | Reset everything to the `appsettings.json` values and restart (no-op with `restarting:false` when nothing was overridden) |
+
+PUT/DELETE respond immediately after persisting; the API host restarts in-process right after the
+response is sent (same port, a couple of seconds of downtime, in-flight scans aborted). `ApiPort`
+and `ApiHost` are read-only on purpose: the frontend addresses the agent at a fixed host:port.
+Every field of the settings body carries a one-line description + allowed range — visible in the
+interactive docs at `/scalar` (they come from the XML docs on `ScannerSettingsDto` and flow into
+`/openapi/openapi.json`).
 
 ### Interactive Documentation
 

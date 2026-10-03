@@ -1,6 +1,8 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
+using ScannerService.Application.Common;
+using ScannerService.Application.DTOs;
 using ScannerService.TrayApp.Configurations;
 using ScannerService.TrayApp.Properties;
 using ScannerService.TrayApp;
@@ -30,7 +32,11 @@ public class TrayApp : ApplicationContext
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ServiceProvider _httpClientServiceProvider;
     private readonly SynchronizationContext _syncContext;
-    private readonly WebApiHostService _webApiHost;
+    private readonly LocalSettingsStore _settingsStore;
+
+    // The API host and its configuration are rebuilt in place when persisted settings apply
+    // (RestartHostAsync), so unlike the other collaborators they are not readonly.
+    private WebApiHostService _webApiHost;
 
     private ToolStripMenuItem? _statusItem;
     private ToolStripMenuItem? _startMenuItem;
@@ -42,7 +48,14 @@ public class TrayApp : ApplicationContext
     private readonly object _stateLock = new object();
     private readonly bool _isAdmin;
 
-    private readonly ScannerServiceConfiguration _config;
+    // 1 while RestartHostAsync is rebuilding the API host; guards against concurrent restarts
+    // (each successful PUT schedules one, but only the first rebuilds) and no-ops tray start/stop.
+    private int _isRestarting;
+
+    // Upper bound for the restart loop that catches settings written mid-restart.
+    private const int MaxRestartPasses = 3;
+
+    private ScannerServiceConfiguration _config;
     private string _apiHealthUrl;
 
     private static readonly CompositeFormat StatusRunningFormat = CompositeFormat.Parse(Resources.StatusRunningPersianFormat);
@@ -62,31 +75,28 @@ public class TrayApp : ApplicationContext
     {
         _isAdmin = isAdmin;
 
-        InitializeEarlyLogging();
+        InitializeLogging();
         Log.Information("Scanner Service Tray Application starting - Running with Admin: {IsAdmin}", isAdmin);
 
-        var configuration = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-            .Build();
+        ScannerServiceConfiguration baseConfig = LocalSettingsStore.LoadBaseConfiguration();
 
-        _config = configuration.GetSection("ScannerService")
-            .Get<ScannerServiceConfiguration>() ?? new ScannerServiceConfiguration();
-
-        // Validate configuration
-        var validation = Configurations.ConfigurationValidator.ValidateScannerServiceConfiguration(_config);
-        if (!validation.IsValid)
+        // Validate the installer-owned base configuration; a broken base is fatal (unchanged behavior).
+        var baseValidation = Configurations.ConfigurationValidator.ValidateScannerServiceConfiguration(baseConfig);
+        if (!baseValidation.IsValid)
         {
-            var errorMessage = "Configuration validation failed:\n" + string.Join("\n", validation.Errors);
-            Log.Fatal("Configuration validation failed: {Errors}", string.Join("; ", validation.Errors));
+            var errorMessage = "Configuration validation failed:\n" + string.Join("\n", baseValidation.Errors);
+            Log.Fatal("Configuration validation failed: {Errors}", string.Join("; ", baseValidation.Errors));
             MessageBox.Show(
                 errorMessage + "\n\nPlease correct appsettings.json and restart the application.",
                 "Configuration Error",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
             System.Windows.Forms.Application.Exit();
-            throw new InvalidOperationException("Configuration validation failed: " + string.Join("; ", validation.Errors));
+            throw new InvalidOperationException("Configuration validation failed: " + string.Join("; ", baseValidation.Errors));
         }
+
+        _settingsStore = new LocalSettingsStore(baseConfig);
+        _config = ResolveStartupConfig(_settingsStore);
 
         _syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
@@ -99,7 +109,8 @@ public class TrayApp : ApplicationContext
         _httpClientServiceProvider = serviceCollection.BuildServiceProvider();
         _httpClientFactory = _httpClientServiceProvider.GetService<IHttpClientFactory>()!;
 
-        _webApiHost = new WebApiHostService(_config);
+        _webApiHost = new WebApiHostService(_config, _settingsStore);
+        _webApiHost.RestartRequested += OnApiHostRestartRequested;
 
         // Note: Actual host/port will be updated when WebApiHostService starts
         _apiHealthUrl = string.Format(CultureInfo.InvariantCulture, ApiUrlFormat, _webApiHost.LocalUrlHost, _config.ApiPort);
@@ -122,7 +133,12 @@ public class TrayApp : ApplicationContext
         StartService();
     }
 
-    private void InitializeEarlyLogging()
+    /// <summary>
+    /// (Re-)initializes the shared Serilog logger. Called at startup and again on the host
+    /// restart failure path: disposing the old host flushes the static logger into silence,
+    /// which must be undone before the failure is logged.
+    /// </summary>
+    private void InitializeLogging()
     {
         var configuration = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
@@ -133,7 +149,32 @@ public class TrayApp : ApplicationContext
             .Get<LoggingConfiguration>() ?? new LoggingConfiguration();
 
         SerilogConfigurationExtensions.InitializeSerilog(loggingConfig, AppContext.BaseDirectory);
-        Log.Information("Scanner Service Tray Application starting");
+    }
+
+    /// <summary>
+    /// Applies the sidecar overrides on top of the base configuration for this process start.
+    /// A corrupt or invalid sidecar never prevents startup: it is reported loudly and the base
+    /// values are used (the store quarantines corrupt content itself; transient read failures
+    /// keep the file on disk so a later start can apply it).
+    /// </summary>
+    private static ScannerServiceConfiguration ResolveStartupConfig(LocalSettingsStore store)
+    {
+        Result<ScannerSettingsOverridesDto> overrides = store.ReadOverrides();
+        if (overrides.IsFailure)
+        {
+            Log.Warning("Ignoring unreadable settings sidecar; starting with appsettings.json values: {Error}", overrides.Error);
+            return store.BaseConfig;
+        }
+
+        ScannerServiceConfiguration merged = ScannerSettingsMapper.Merge(store.BaseConfig, overrides.Value!);
+        var validation = Configurations.ConfigurationValidator.ValidateScannerServiceConfiguration(merged);
+        if (!validation.IsValid)
+        {
+            Log.Warning("Settings sidecar values failed validation and are ignored for this start: {Errors}", string.Join("; ", validation.Errors));
+            return store.BaseConfig;
+        }
+
+        return merged;
     }
 
     protected override void Dispose(bool disposing)
@@ -155,6 +196,7 @@ public class TrayApp : ApplicationContext
                 _statusCheckTimer.Dispose();
             }
 
+            _webApiHost?.RestartRequested -= OnApiHostRestartRequested;
             _webApiHost?.Dispose();
             _httpClientServiceProvider?.Dispose();
 
@@ -345,8 +387,22 @@ public class TrayApp : ApplicationContext
             return;
         }
 
+        // A restart rebuilds this very host; starting it concurrently would race the swap.
+        if (Interlocked.CompareExchange(ref _isRestarting, 0, 0) == 1)
+        {
+            return;
+        }
+
         Task.Run(async () =>
         {
+            // Re-check inside the body: the outer check is advisory, and a restart scheduled
+            // between the check and this body must win the race (the body would otherwise touch
+            // a host that the restart is swapping out).
+            if (Interlocked.CompareExchange(ref _isRestarting, 0, 0) == 1)
+            {
+                return;
+            }
+
             try
             {
                 if (_webApiHost.IsRunning)
@@ -394,8 +450,20 @@ public class TrayApp : ApplicationContext
             return;
         }
 
+        // A restart rebuilds this very host; stopping it concurrently would race the swap.
+        if (Interlocked.CompareExchange(ref _isRestarting, 0, 0) == 1)
+        {
+            return;
+        }
+
         Task.Run(async () =>
         {
+            // Re-check inside the body: see StartService.
+            if (Interlocked.CompareExchange(ref _isRestarting, 0, 0) == 1)
+            {
+                return;
+            }
+
             try
             {
                 await _webApiHost.StopAsync();
@@ -426,11 +494,163 @@ public class TrayApp : ApplicationContext
         });
     }
 
+    /// <summary>
+    /// Event-handler entry point for a settings-triggered host restart. Stale raises (an old
+    /// host whose successor already serves, or a raise during teardown) are dropped.
+    /// </summary>
+    private void OnApiHostRestartRequested(object? sender, EventArgs e)
+    {
+        if (_isDisposed || !ReferenceEquals(sender, _webApiHost))
+        {
+            return;
+        }
+
+        _ = RestartHostAsync();
+    }
+
+    /// <summary>
+    /// Rebuilds the API host in place so persisted settings take effect. The new configuration
+    /// is loaded and validated BEFORE the old host is touched: invalid settings never take a
+    /// working host down. The bounded sequence is stop → dispose → construct → start; the new
+    /// host's StartAsync re-initializes Serilog (the old host's Dispose flushes it silent).
+    /// A PUT whose response completes DURING a restart has its restart raise die with the old
+    /// host, so the sidecar snapshot is re-checked after each swap and the restart runs once
+    /// more when it changed (bounded, so a pathological writer cannot loop forever).
+    /// </summary>
+    private async Task RestartHostAsync()
+    {
+        if (Interlocked.CompareExchange(ref _isRestarting, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            for (int attempt = 1; attempt <= MaxRestartPasses; attempt++)
+            {
+                string? sidecarBefore = _settingsStore.ReadSidecarSnapshot();
+                Result<ScannerServiceConfiguration> effective = _settingsStore.LoadEffectiveConfiguration();
+                if (effective.IsFailure)
+                {
+                    Log.Error("Not restarting the API host; the persisted settings are invalid: {Error}", effective.Error);
+                    NotifySettingsRejected();
+                    return;
+                }
+
+                Log.Information("Restarting the API host to apply settings");
+                WebApiHostService oldHost = _webApiHost;
+                oldHost.RestartRequested -= OnApiHostRestartRequested;
+                ScannerServiceConfiguration previousConfig = _config;
+
+                await oldHost.StopAsync();
+                oldHost.Dispose();
+
+                try
+                {
+                    var newHost = new WebApiHostService(effective.Value!, _settingsStore);
+                    newHost.RestartRequested += OnApiHostRestartRequested;
+                    _webApiHost = newHost;
+                    _config = effective.Value!;
+                    await newHost.StartAsync();
+                }
+                catch (Exception startFailure)
+                {
+                    // The old host is already gone and flushed the logger: re-init BEFORE logging.
+                    InitializeLogging();
+                    Log.Error(startFailure, "The API host failed to start with the new settings; rolling back to the previous configuration");
+                    if (await RollbackApiHostAsync(previousConfig))
+                    {
+                        // Rollback may land on a different fallback port than the previous host:
+                        // refresh the health URL, and tell the user the PUT was NOT applied.
+                        PostRestartUiUpdate(Resources.SettingsInvalidRevertedText, ToolTipIcon.Warning);
+                    }
+
+                    return;
+                }
+
+                PostRestartUiUpdate(Resources.SettingsAppliedText, ToolTipIcon.Info);
+                string? sidecarAfter = _settingsStore.ReadSidecarSnapshot();
+                if (string.Equals(sidecarBefore, sidecarAfter, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                Log.Information("Settings changed while the restart was in flight; applying once more");
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _isRestarting, 0);
+        }
+    }
+
+    /// <summary>One rollback attempt with the configuration the previous host ran with;
+    /// true when the rolled-back host is serving again.</summary>
+    private async Task<bool> RollbackApiHostAsync(ScannerServiceConfiguration previousConfig)
+    {
+        try
+        {
+            WebApiHostService failedHost = _webApiHost;
+            failedHost.RestartRequested -= OnApiHostRestartRequested;
+
+            var rollbackHost = new WebApiHostService(previousConfig, _settingsStore);
+            rollbackHost.RestartRequested += OnApiHostRestartRequested;
+            _webApiHost = rollbackHost;
+            _config = previousConfig;
+            await rollbackHost.StartAsync();
+            return true;
+        }
+        catch (Exception rollbackFailure)
+        {
+            Log.Error(rollbackFailure, "Rolling the API host back also failed; use the tray menu to start the service");
+            _syncContext.Post(_ =>
+            {
+                if (!_isDisposed)
+                {
+                    UpdateUI(false);
+                }
+            }, null);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Applies tray-level state that took effect with the (re)started host — timer interval,
+    /// health URL (the port-fallback search may have moved the bind) — and posts the outcome
+    /// balloon. Always marshalled to the UI thread; the timer is a WinForms component.
+    /// </summary>
+    private void PostRestartUiUpdate(string notificationText, ToolTipIcon icon)
+    {
+        _syncContext.Post(_ =>
+        {
+            if (_isDisposed)
+            {
+                return;
+            }
+
+            _statusCheckTimer.Interval = _config.StatusCheckInterval;
+            _apiHealthUrl = string.Format(CultureInfo.InvariantCulture, ApiUrlFormat, _webApiHost.LocalUrlHost, _webApiHost.ActualPort);
+            ShowNotification(notificationText, icon);
+        }, null);
+    }
+
+    private void NotifySettingsRejected()
+    {
+        _syncContext.Post(_ =>
+        {
+            if (!_isDisposed)
+            {
+                ShowNotification(Resources.SettingsInvalidRevertedText, ToolTipIcon.Warning);
+            }
+        }, null);
+    }
+
     private async Task<bool> IsApiRespondingAsync()
     {
         try
         {
             var httpClient = _httpClientFactory.CreateClient("StatusCheck");
+            httpClient.Timeout = TimeSpan.FromMilliseconds(_config.HttpTimeout);
             var response = await httpClient.GetAsync(_apiHealthUrl);
             return response.IsSuccessStatusCode;
         }

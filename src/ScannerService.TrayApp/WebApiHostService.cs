@@ -32,6 +32,7 @@ public class WebApiHostService : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _runTask;
     private readonly ScannerServiceConfiguration _config;
+    private readonly LocalSettingsStore _settingsStore;
 
     // Resolved once per start; drives the port probe, the Kestrel bind, the beyond-loopback warning
     // and the local URL host. A field (not a local) so the start-failure catch blocks can read it.
@@ -48,6 +49,21 @@ public class WebApiHostService : IDisposable
     public bool IsRunning { get; private set; }
     public int ActualPort { get; private set; }
 
+    /// <summary>Port configured in appsettings.json before any port-fallback search.</summary>
+    public int ConfiguredPort => _config.ApiPort;
+
+    /// <summary>
+    /// Raised when an API consumer asks for the host to restart so persisted settings apply.
+    /// TrayApp subscribes and rebuilds this host in-process; stale senders (an old host whose
+    /// successor already serves) are dropped by the subscriber via reference equality.
+    /// </summary>
+    public event EventHandler? RestartRequested;
+
+    public void RequestRestart()
+    {
+        RestartRequested?.Invoke(this, EventArgs.Empty);
+    }
+
     /// <summary>
     /// Host spliced into locally-constructed URLs (health poll, API docs): "localhost" for loopback
     /// and wildcard binds (those always cover loopback), the literal IP (bracketed when IPv6) for a
@@ -55,9 +71,10 @@ public class WebApiHostService : IDisposable
     /// </summary>
     public string LocalUrlHost { get; private set; }
 
-    public WebApiHostService(ScannerServiceConfiguration config)
+    public WebApiHostService(ScannerServiceConfiguration config, LocalSettingsStore settingsStore)
     {
         _config = config;
+        _settingsStore = settingsStore;
         ActualPort = config.ApiPort;
         LocalUrlHost = ParseApiHost(config.ApiHost).UrlHost;
     }
@@ -71,6 +88,18 @@ public class WebApiHostService : IDisposable
 
         try
         {
+            // Logging FIRST: on host restarts the old host's Dispose has already flushed the
+            // static logger silent, and the firewall step below logs the manual netsh command
+            // on unelevated runs — that must not land in the silent window.
+            var loggingConfig = SerilogConfigurationExtensions.LoadLoggingConfiguration();
+            var logValidation = Configurations.ConfigurationValidator.ValidateLoggingConfiguration(loggingConfig);
+            if (!logValidation.IsValid)
+            {
+                throw new InvalidOperationException("Logging configuration validation failed: " + string.Join("; ", logValidation.Errors));
+            }
+
+            SerilogConfigurationExtensions.InitializeSerilog(loggingConfig, AppContext.BaseDirectory);
+
             // eSCL network scanner discovery needs inbound UDP 5353 (mDNS) allowed for this executable;
             // the default firewall policy silently drops the device's multicast answers. Adding the
             // rule requires elevation; unelevated runs log the manual command instead.
@@ -85,16 +114,6 @@ public class WebApiHostService : IDisposable
                 EnvironmentName = Environments.Production
             });
 
-            var loggingConfig = builder.Configuration.GetSection("Logging")
-                .Get<LoggingConfiguration>() ?? new LoggingConfiguration();
-
-            var logValidation = Configurations.ConfigurationValidator.ValidateLoggingConfiguration(loggingConfig);
-            if (!logValidation.IsValid)
-            {
-                throw new InvalidOperationException("Logging configuration validation failed: " + string.Join("; ", logValidation.Errors));
-            }
-
-            SerilogConfigurationExtensions.InitializeSerilog(loggingConfig, AppContext.BaseDirectory);
             builder.Host.UseSerilog();
 
             var availablePort = await FindAvailablePortAsync(_config.ApiPort, _bindTarget.ProbeAddress);
@@ -180,6 +199,11 @@ public class WebApiHostService : IDisposable
             }
 
             builder.Services.AddSingleton<IReadOnlyList<Domain.Common.EsclManualDevice>>(manualEsclDevices);
+
+            // Settings API collaborators: the sidecar store (base snapshot + file IO) and a
+            // deliberately non-disposable restart/hostname wrapper for this host instance.
+            builder.Services.AddSingleton(_settingsStore);
+            builder.Services.AddSingleton<IApiHostControl>(new ApiHostControl(this));
 
             // Scanner services with proper lifetime management
             builder.Services.AddSingleton<Infrastructure.Services.ScannerInitializer>();

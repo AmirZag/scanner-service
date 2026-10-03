@@ -1,4 +1,5 @@
 using System.Globalization;
+using Microsoft.Extensions.Configuration;
 using Serilog;
 using Serilog.Events;
 using ScannerService.TrayApp.Configurations;
@@ -61,6 +62,21 @@ public static class SerilogConfigurationExtensions
         Log.Logger = new LoggerConfiguration()
             .ConfigureFileLogging(loggingConfig, baseDirectory)
             .CreateLogger();
+    }
+
+    /// <summary>
+    /// Loads the Logging section straight from appsettings.json, independent of any host builder.
+    /// Used where logging must be initialized BEFORE the WebApplication builder exists (host
+    /// restarts: the old host's Dispose flushes the static logger silent, and early startup steps
+    /// like the firewall-rule logging must not land in that silent window).
+    /// </summary>
+    public static LoggingConfiguration LoadLoggingConfiguration()
+    {
+        var configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+            .Build();
+        return configuration.GetSection("Logging").Get<LoggingConfiguration>() ?? new LoggingConfiguration();
     }
 
     private static RollingInterval ParseRollingInterval(string interval)

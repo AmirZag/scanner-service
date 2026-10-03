@@ -163,6 +163,12 @@
   <data name="ServiceStartedText" xml:space="preserve">
     <value>شروع شده</value>
   </data>
+  <data name="SettingsAppliedText" xml:space="preserve">
+    <value>تنظیمات ذخیره شد و سرویس با مقادیر جدید راه‌اندازی مجدد شد</value>
+  </data>
+  <data name="SettingsInvalidRevertedText" xml:space="preserve">
+    <value>تنظیمات ذخیره‌شده نامعتبر است؛ سرویس با تنظیمات فعلی به کار خود ادامه می‌دهد</value>
+  </data>
   <data name="ServiceStoppedNotificationText" xml:space="preserve">
     <value>متوقف شده</value>
   </data>

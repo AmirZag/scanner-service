@@ -5,7 +5,9 @@ using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
 using ScannerService.Application.Validators;
+using ScannerService.TrayApp;
 using FluentValidation;
+using Serilog;
 
 namespace ScannerService.TrayApp.Configurations;
 
@@ -30,6 +32,7 @@ public static class EndpointConfigurationExtensions
         app.ConfigureScanEndpoints();
         app.ConfigureExportSettingsEndpoints();
         app.ConfigureRecentScansEndpoints();
+        app.ConfigureSettingsEndpoints();
     }
 
     /// <summary>
@@ -288,5 +291,128 @@ public static class EndpointConfigurationExtensions
             .WithName("GetRecentScans")
             .WithTags("Recent Scans")
             .Produces<RecentScansResponseDto>(StatusCodes.Status200OK);
+    }
+
+    /// <summary>
+    /// Configures settings endpoints: GET returns the currently effective settings, PUT accepts
+    /// the same flat shape as a full replacement (persisted to the appsettings.local.json sidecar),
+    /// and DELETE removes all overrides (back to the appsettings.json values). Persisting changes
+    /// restarts the API host in-process after the response completes (settings are baked into
+    /// host singletons), so PUT/DELETE reply first and the caller re-polls /api/health.
+    /// </summary>
+    public static void ConfigureSettingsEndpoints(this WebApplication app)
+    {
+        app.MapGet("/api/settings", (LocalSettingsStore store) =>
+        {
+            Result<ScannerSettingsOverridesDto> overrides = store.ReadOverrides();
+            if (overrides.IsFailure)
+            {
+                // Corrupt sidecar: serve the appsettings.json values (startup/restart quarantine
+                // and logging already report the problem; the screen must still render).
+                Log.Warning("Settings sidecar could not be read; serving appsettings.json values: {Error}", overrides.Error);
+            }
+
+            ScannerServiceConfiguration effective = overrides.IsSuccess
+                ? ScannerSettingsMapper.Merge(store.BaseConfig, overrides.Value!)
+                : store.BaseConfig;
+
+            // Sidecar values that fail validation (hand-edited) are ignored at startup — serve
+            // the values the app actually runs with (the base), not the rejected ones.
+            (bool IsValid, List<string> Errors) effectiveValidation = Configurations.ConfigurationValidator.ValidateScannerServiceConfiguration(effective);
+            if (!effectiveValidation.IsValid)
+            {
+                Log.Warning("Serving appsettings.json settings; the sidecar values are invalid: {Errors}", string.Join("; ", effectiveValidation.Errors));
+                effective = store.BaseConfig;
+            }
+
+            return Results.Ok(ScannerSettingsMapper.ToSettingsDto(effective));
+        })
+        .WithName("GetSettings")
+        .WithTags("Settings")
+        .Produces<ScannerSettingsDto>(StatusCodes.Status200OK);
+
+        app.MapPut("/api/settings", async (
+            ScannerSettingsDto dto,
+            LocalSettingsStore store,
+            IApiHostControl apiHost,
+            IValidator<ScannerSettingsDto> validator,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var validationResult = await validator.ValidateAsync(dto, ct);
+            if (!validationResult.IsValid)
+            {
+                return Results.ValidationProblem(validationResult.ToDictionary());
+            }
+
+            ScannerServiceConfiguration candidate = ScannerSettingsMapper.ToConfiguration(store.BaseConfig, dto);
+            (bool IsValid, List<string> Errors) configValidation = Configurations.ConfigurationValidator.ValidateScannerServiceConfiguration(candidate);
+            if (!configValidation.IsValid)
+            {
+                return Results.ValidationProblem(ScannerSettingsMapper.ToValidationProblem(configValidation));
+            }
+
+            Result writeResult = await store.WriteOverrides(ScannerSettingsMapper.ToOverridesDto(dto), ct);
+            if (writeResult.IsFailure)
+            {
+                // Nothing persisted, so nothing to apply: the running host stays untouched.
+                return Results.Problem(title: "Failed to persist settings", detail: writeResult.Error, statusCode: StatusCodes.Status500InternalServerError);
+            }
+
+            ScheduleHostRestart(context, apiHost);
+            return Results.Ok(new SettingsUpdateResponseDto(
+                true,
+                "Settings saved; the API host is restarting with the new values. In-flight scans are aborted; poll /api/health until it responds again."));
+        })
+        .WithName("UpdateSettings")
+        .WithTags("Settings")
+        .Produces<SettingsUpdateResponseDto>(StatusCodes.Status200OK)
+        .ProducesValidationProblem()
+        .Produces(StatusCodes.Status500InternalServerError)
+        .Accepts<ScannerSettingsDto>("application/json");
+
+        app.MapDelete("/api/settings/overrides", (LocalSettingsStore store, IApiHostControl apiHost, HttpContext context) =>
+        {
+            // Nothing to reset: do not stop the host (and abort in-flight scans) for a no-op.
+            if (!store.SidecarExists)
+            {
+                return Results.Ok(new SettingsUpdateResponseDto(false, "No overrides present; nothing to reset."));
+            }
+
+            Result deleteResult = store.DeleteOverrides();
+            if (deleteResult.IsFailure)
+            {
+                return Results.Problem(title: "Failed to reset settings", detail: deleteResult.Error, statusCode: StatusCodes.Status500InternalServerError);
+            }
+
+            ScheduleHostRestart(context, apiHost);
+            return Results.Ok(new SettingsUpdateResponseDto(
+                true,
+                "Overrides removed; the API host is restarting with the appsettings.json values."));
+        })
+        .WithName("ResetSettings")
+        .WithTags("Settings")
+        .Produces<SettingsUpdateResponseDto>(StatusCodes.Status200OK)
+        .Produces(StatusCodes.Status500InternalServerError);
+    }
+
+    /// <summary>
+    /// Registers the in-process host restart to run after the response has been fully sent —
+    /// the same post-response pattern the scan endpoint uses for temp-file cleanup. Restarting
+    /// earlier would kill the very connection receiving the confirmation.
+    /// </summary>
+    private static void ScheduleHostRestart(HttpContext context, IApiHostControl apiHost)
+    {
+        context.Response.OnCompleted(() =>
+        {
+            apiHost.RequestRestart();
+            return Task.CompletedTask;
+        });
+    }
+
+    private static ScannerSettingsOverridesDto CreateEmptyOverrides()
+    {
+        return new ScannerSettingsOverridesDto(
+            null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 }
