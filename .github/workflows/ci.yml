@@ -106,8 +106,24 @@ jobs:
       - name: Coverage gate
         # Fails when any coverable line is uncovered and not on the script's documented
         # allowlist, and reports allowlist entries that have become covered.
+        # The gate runs as a child pwsh so its exit code is unambiguous (a terminating
+        # Write-Error inside the script would not set $LASTEXITCODE in this session), and
+        # its failure lines are re-emitted as ::error:: annotations so the uncovered line
+        # list is readable from the public checks API without repo credentials.
         shell: pwsh
-        run: ./tests/Check-Coverage.ps1
+        run: |
+          $output = & pwsh -NoProfile -File ./tests/Check-Coverage.ps1 2>&1 | Tee-Object -Variable gateOutput
+          $output | ForEach-Object { Write-Host $_ }
+          $exit = $LASTEXITCODE
+          if ($exit -ne 0) {
+            $interesting = @($gateOutput | Where-Object { "$_" -match 'uncovered lines not on the allowlist|no instrumented lines found|\[FAIL\]' } | Select-Object -First 10)
+            foreach ($line in $interesting) {
+              $text = ("$line" -replace '\r?\n', ' ')
+              if ($text.Length -gt 1000) { $text = $text.Substring(0, 1000) }
+              Write-Host "::error::$text"
+            }
+          }
+          exit $exit
 
       - name: Upload test results on failure
         if: failure()
