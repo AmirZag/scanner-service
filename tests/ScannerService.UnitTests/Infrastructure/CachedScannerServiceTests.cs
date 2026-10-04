@@ -71,6 +71,35 @@ public sealed class CachedScannerServiceTests
     }
 
     [Fact]
+    public async Task GetScannersListAsync_WaiterQueuedDuringEnumeration_ServesRefreshedListFromDoubleCheck()
+    {
+        // Pins the post-gate re-check path (the "refreshed by a concurrent request" branch).
+        // Both callers are invoked directly on the test thread: caller 1's synchronous prefix
+        // runs inline and it parks inside the gated inner enumeration holding the single-flight
+        // gate; caller 2's synchronous prefix (cache miss, WaitAsync on the held gate) also runs
+        // inline, so the waiter is deterministically parked before the enumeration completes.
+        // The Task.Run-based overlap test cannot guarantee that under thread-pool starvation,
+        // which left this branch uncovered on constrained runners.
+        GatedScannerQueriesFake inner = new GatedScannerQueriesFake();
+        using MemoryCache cache = new MemoryCache(new MemoryCacheOptions());
+        using CachedScannerService decorator = new CachedScannerService(inner, cache, NullLogger<CachedScannerService>.Instance);
+
+        Task<List<ScannerDto>> first = decorator.GetScannersListAsync();
+        await inner.WaitUntilEnumeratingAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Task<List<ScannerDto>> second = decorator.GetScannersListAsync();
+        Assert.False(second.IsCompleted);
+
+        inner.Release();
+
+        List<ScannerDto> firstResult = await first;
+        List<ScannerDto> secondResult = await second;
+
+        Assert.Equal(1, inner.CallCount);
+        Assert.Same(firstResult, secondResult);
+    }
+
+    [Fact]
     public async Task GetScannersListAsync_InnerFailureAfterCachedValue_ServesLastGoodList()
     {
         CountingScannerQueriesFake inner = new CountingScannerQueriesFake();

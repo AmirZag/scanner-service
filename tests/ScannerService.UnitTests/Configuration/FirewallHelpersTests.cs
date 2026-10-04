@@ -144,4 +144,21 @@ public class FirewallHelpersTests
         Assert.Contains("dir=in action=allow protocol=UDP localport=5353 profile=any", arguments, StringComparison.Ordinal);
         Assert.Contains("program=\"C:\\Apps\\ScannerService.TrayApp.exe\"", arguments, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void NetshFirewallRule_AddRule_WithInvalidNetshArguments_ThrowsInvalidOperationException()
+    {
+        // Netsh validates arguments before touching the firewall, so an invalid action value fails
+        // with a nonzero exit code on every host - elevated or not - and deterministically reaches
+        // the AddRule throw. The facade AddRule tests above only reach that throw on unelevated
+        // hosts, which left the line uncovered on elevated automation runners. No rule is created
+        // (netsh rejects the arguments), so no cleanup is needed.
+        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(
+            () => NetshFirewallRule.AddRule(
+                "Resaa Scanner Service - invalid-args probe",
+                "advfirewall firewall add rule name=\"Resaa Scanner Service - invalid-args probe\" dir=in action=bogus",
+                elevate: false));
+
+        Assert.Contains("netsh did not add the", failure.Message, StringComparison.Ordinal);
+    }
 }
