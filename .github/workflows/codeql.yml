@@ -1,0 +1,56 @@
+# CodeQL code scanning (advanced setup).
+#
+# NOTE: if CodeQL "Default setup" is enabled for this repository (Settings -> Code security
+# and analysis -> Code scanning), disable it first — default setup disables workflow-based
+# analysis and blocks SARIF uploads, so the two setups conflict.
+#
+# build-mode: none (no-build analysis) is GA for C#: CodeQL restores dependencies and builds
+# its database from source without invoking MSBuild, which avoids CodeQL's injected build
+# flags (UseSharedCompilation=false, EmitCompilerGeneratedFiles=true, ...) interacting with
+# this repo's TreatWarningsAsErrors strict build.
+name: CodeQL
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  schedule:
+    # Weekly, Monday 05:19 UTC — catches new findings in dependencies/queries even when
+    # nothing is pushed. Off the hour: scheduled runs queue heaviest at round times.
+    - cron: '19 5 * * 1'
+
+permissions:
+  security-events: write
+  packages: read
+  actions: read
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (csharp)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 10 SDK
+        # Not required by build-mode: none, but pins the SDK deterministically and becomes
+        # required if the build mode is ever switched to autobuild/manual.
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: csharp
+          build-mode: none
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: '/language:csharp'
