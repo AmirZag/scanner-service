@@ -231,7 +231,14 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // The requesting client is gone; let the consumer unwind and clean up on its own.
+            // The requesting client is gone; stop the watchdog and observe the consumer before
+            // this method unwinds and the gate opens to the next scan. Observing here closes the
+            // two abort-path gaps: an abandoned consumer still inside native driver I/O could
+            // otherwise keep holding the device while a new scan begins, and a consumer that
+            // completed during the abort would leak its ProcessedImages (the helper disposes
+            // exactly those).
+            await watchdogCts.CancelAsync();
+            await ObserveAbortedConsumerAsync(consumeTask, images);
             throw;
         }
         catch (OperationCanceledException ex)
@@ -426,14 +433,14 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 
         if (config.Format.Equals(ScannerConstants.ExportFormat.PDF, StringComparison.OrdinalIgnoreCase))
         {
-            var path = Path.Combine(config.ExportPath, $"{name}.pdf");
+            var path = ResolveCollisionFreeOutputPath(config.ExportPath, name, "pdf");
             await new PdfExporter(context).Export(path, images);
             files.Add(path);
             _logger.LogDebug("Saved PDF: {Path}", path);
         }
         else if (config.Format.Equals(ScannerConstants.ExportFormat.MultiPageTIFF, StringComparison.OrdinalIgnoreCase))
         {
-            var path = Path.Combine(config.ExportPath, $"{name}.tiff");
+            var path = ResolveCollisionFreeOutputPath(config.ExportPath, name, "tiff");
             await SaveMultiPageTiffAsync(images, path);
             files.Add(path);
             _logger.LogDebug("Saved multi-page TIFF: {Path}", path);
@@ -441,11 +448,11 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         else
         {
             var format = ParseImageFileFormat(config.Format);
+            var ext = config.Format.ToLowerInvariant();
 
             for (int i = 0; i < images.Count; i++)
             {
-                var ext = config.Format.ToLowerInvariant();
-                var path = Path.Combine(config.ExportPath, $"{name}_{i + 1}.{ext}");
+                var path = ResolveCollisionFreeOutputPath(config.ExportPath, $"{name}_{i + 1}", ext);
                 images[i].Save(path, format);
                 files.Add(path);
             }
@@ -453,6 +460,25 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         }
 
         return files;
+    }
+
+    /// <summary>
+    /// Resolves an output path that does not collide with an existing file: two scans of the same
+    /// profile inside one second share the same datetime-stamped name, and the later scan must
+    /// not silently overwrite the earlier one's scanned documents. The attempt suffix (_2, _3, ...)
+    /// composes with the page suffix of per-image names.
+    /// </summary>
+    private static string ResolveCollisionFreeOutputPath(string directory, string candidateName, string extension)
+    {
+        var path = Path.Combine(directory, $"{candidateName}.{extension}");
+        int attempt = 2;
+        while (File.Exists(path))
+        {
+            path = Path.Combine(directory, $"{candidateName}_{attempt}.{extension}");
+            attempt++;
+        }
+
+        return path;
     }
 
     internal static BitDepth ParseBitDepth(string bitDepth)

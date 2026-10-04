@@ -212,6 +212,13 @@ public class ScanJobService : IScanJobService
             {
                 var zipPath = Path.Combine(Path.GetTempPath(), $"scan_{Guid.NewGuid()}.zip");
 
+                // Track BEFORE creating so a failure or cancellation mid-archive still leaves the
+                // partial file on the cleanup sweep's radar instead of orphaning it invisibly.
+                lock (TempFilesToDelete)
+                {
+                    TempFilesToDelete.Add(zipPath);
+                }
+
                 // Zip only this scan's files; the export directory may hold months of earlier scans
                 // and zipping it wholesale would leak them into every multi-page response.
                 await using (var zipStream = new FileStream(zipPath, FileMode.CreateNew))
@@ -223,14 +230,9 @@ public class ScanJobService : IScanJobService
                     }
                 }
 
-                // Track for cleanup
-                lock (TempFilesToDelete)
-                {
-                    TempFilesToDelete.Add(zipPath);
-                }
-
                 filePath = zipPath;
-                fileName = $"scanned_documents_{DateTime.UtcNow:yyyyMMdd_HHmmss}.zip";
+                // Local time to match the scan output file names (single-timezone desktop app).
+                fileName = $"scanned_documents_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
                 contentType = ContentTypes.GetContentType(".zip");
             }
 
@@ -239,6 +241,12 @@ public class ScanJobService : IScanJobService
                 req.ProfileId, profile.Name, files.Count, duration.TotalMilliseconds, filePath);
 
             return Result<ScanResultDto>.Success(ScanResultDto.Successful(filePath, fileName, contentType, duration));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The requesting client is gone; let the consumer unwind and clean up on its own
+            // instead of logging an Error-level "Scan failed" for a routine disconnect.
+            throw;
         }
         catch (Exception ex)
         {

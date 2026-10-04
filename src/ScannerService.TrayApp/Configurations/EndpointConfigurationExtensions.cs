@@ -131,15 +131,15 @@ public static class EndpointConfigurationExtensions
     /// </summary>
     public static void ConfigureProfileEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/profiles", async (IProfileRepository svc) =>
-            Results.Ok(await svc.GetAllAsync()))
+        app.MapGet("/api/profiles", async (IProfileRepository svc, CancellationToken ct) =>
+            Results.Ok(await svc.GetAllAsync(ct)))
             .WithName("GetAllProfiles")
             .WithTags("Profiles")
             .Produces(StatusCodes.Status200OK);
 
-        app.MapGet("/api/profiles/{id}", async (int id, IProfileRepository svc) =>
+        app.MapGet("/api/profiles/{id}", async (int id, IProfileRepository svc, CancellationToken ct) =>
         {
-            var result = await svc.GetByIdAsync(id);
+            var result = await svc.GetByIdAsync(id, ct);
             return result == null
                 ? Results.NotFound(new { error = $"Profile {id} not found" })
                 : Results.Ok(result);
@@ -186,9 +186,9 @@ public static class EndpointConfigurationExtensions
         .ProducesValidationProblem()
         .Accepts<UpdateProfileDto>("application/json");
 
-        app.MapDelete("/api/profiles/{id}", async (int id, IProfileRepository svc) =>
+        app.MapDelete("/api/profiles/{id}", async (int id, IProfileRepository svc, CancellationToken ct) =>
         {
-            var result = await svc.DeleteAsync(id);
+            var result = await svc.DeleteAsync(id, ct);
             return result.IsFailure
                 ? Results.NotFound(new { error = result.Error })
                 : Results.NoContent();
@@ -249,9 +249,9 @@ public static class EndpointConfigurationExtensions
     /// </summary>
     public static void ConfigureExportSettingsEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/export-settings", async (IExportSettingRepository svc) =>
+        app.MapGet("/api/export-settings", async (IExportSettingRepository svc, CancellationToken ct) =>
         {
-            var result = await svc.GetExportSettingAsync();
+            var result = await svc.GetExportSettingAsync(ct);
             return result.IsFailure
                 ? Results.BadRequest(new { error = result.Error })
                 : Results.Ok(result.Value);

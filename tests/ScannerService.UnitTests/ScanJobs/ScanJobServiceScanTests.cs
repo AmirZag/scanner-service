@@ -185,23 +185,20 @@ public sealed class ScanJobServiceScanTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task StartScanJob_CancelledToken_ThrowsOperationCanceled_ReturnsFailureInsteadOfRethrowing_CurrentBehavior()
+    public async Task StartScanJob_CancelledToken_RethrowsOperationCanceled()
     {
-        // KNOWN BUG A-11: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // The catch-all converts a client-abort OperationCanceledException into a Failure result;
-        // the fix should rethrow it while cancellationToken.IsCancellationRequested, so this test
-        // should expect an OperationCanceledException instead of a Failure result.
+        // FIXED (Phase 2 Batch 2, audit A-11): a client-abort OperationCanceledException propagates
+        // instead of being converted into a Failure result (and an Error-level "Scan failed" log
+        // for a routine disconnect).
         _harness.Scanner.ThrowOperationCanceledWhenTokenCancelled = true;
         await _harness.SetExportPathAsync(_harness.ExportDirectory);
         Profile profile = await _harness.SeedProfileAsync(deviceId: "escl-device-01");
         using CancellationTokenSource cancelledSource = new();
         await cancelledSource.CancelAsync();
 
-        Result<ScanResultDto> result = await _harness.CreateScanJobService()
-            .StartScanJobAsync(new ScanRequestDto(profile.Id), cancelledSource.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            _harness.CreateScanJobService().StartScanJobAsync(new ScanRequestDto(profile.Id), cancelledSource.Token));
 
-        Assert.True(result.IsFailure);
-        Assert.Null(result.Value);
         Assert.Empty(_harness.Scanner.WrittenFilePaths);
     }
 
@@ -357,12 +354,11 @@ public sealed class ScanJobServiceScanTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task StartScanJob_MissingSourceFile_LeavesUnsweptPartialZip_CurrentBehavior()
+    public async Task StartScanJob_MissingSourceFile_TracksPartialZipSoSweepRemovesIt()
     {
-        // KNOWN BUG A-6 (adjacent pin): pins current (buggy) behavior; flip this assertion when the
-        // bug is fixed. The zip file is created at the start of the archive block but is tracked
-        // only after the block succeeds, so an entry failure leaves an untracked partial zip that
-        // no CleanupOldTempFiles sweep can ever see. The fix should track before creating.
+        // FIXED (Phase 2 Batch 2, audit A-6): the zip is tracked before the archive block, so an
+        // entry failure mid-archive leaves the partial zip ON the cleanup sweep's radar and the
+        // next CleanupOldTempFiles removes it instead of orphaning it invisibly.
         string tempRoot = Path.GetTempPath();
         HashSet<string> zipsBefore = new(Directory.GetFiles(tempRoot, "scan_*.zip"), StringComparer.Ordinal);
         _harness.Scanner.FileNamesToWrite = ["page_1.jpg", "page_2.jpg", "page_3.jpg"];
@@ -379,18 +375,18 @@ public sealed class ScanJobServiceScanTests : IAsyncLifetime
         List<string> newZipPaths = Directory.GetFiles(tempRoot, "scan_*.zip")
             .Where(path => !zipsBefore.Contains(path))
             .ToList();
-        string orphanZipPath = Assert.Single(newZipPaths);
+        string partialZipPath = Assert.Single(newZipPaths);
 
         try
         {
-            Assert.True(File.Exists(orphanZipPath));
+            Assert.True(File.Exists(partialZipPath));
 
             _harness.CreateScanJobService().CleanupOldTempFiles(TimeSpan.Zero);
-            Assert.True(File.Exists(orphanZipPath));
+            Assert.False(File.Exists(partialZipPath), "Expected the tracked partial zip to be swept by CleanupOldTempFiles");
         }
         finally
         {
-            File.Delete(orphanZipPath);
+            File.Delete(partialZipPath);
         }
     }
 

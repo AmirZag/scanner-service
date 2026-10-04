@@ -154,36 +154,55 @@ public sealed class ScannerServiceSaveAsyncTests : IAsyncLifetime
         AssertJpegContent(savedFile);
     }
 
-    // KNOWN BUG AR-3: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-    // {datetime} has one-second granularity and File.Exists is never checked, so two SaveAsync
-    // calls with the same configuration inside one wall-clock second resolve to the same output
-    // path and the second export silently overwrites the first. A bounded retry keeps the test
-    // deterministic when the pair of calls straddles a second boundary.
+    // FIXED (Phase 2 Batch 2, audit AR-3): output paths resolve collision-free, so two scans of
+    // the same profile inside one second no longer overwrite the first scan's documents - the
+    // second export lands on a "_2" sibling. Seeding the colliding file directly (instead of
+    // relying on second-boundary timing) keeps the test deterministic.
     [Fact]
-    public async Task SaveAsync_SameConfigWithinOneSecond_CurrentBehavior_ReturnsSamePathAndOverwrites()
+    public async Task SaveAsync_CollidingOutputName_GetsUniquePathAndKeepsFirstFile()
     {
         List<ProcessedImage> images = await ImportPagesAsync(1);
-        ScanJobConfiguration config = CreateConfig(ScannerConstants.ExportFormat.PDF, "doc_{datetime}");
+        ScanJobConfiguration config = CreateConfig(ScannerConstants.ExportFormat.PDF, "doc_fixed");
 
-        string firstPath = string.Empty;
-        string secondPath = string.Empty;
-        bool sameSecondObserved = false;
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            List<string> firstFiles = await _service.SaveAsync(images, config, _scanningContext);
-            List<string> secondFiles = await _service.SaveAsync(images, config, _scanningContext);
-            firstPath = firstFiles[0];
-            secondPath = secondFiles[0];
-            if (firstPath == secondPath)
-            {
-                sameSecondObserved = true;
-                break;
-            }
-        }
+        string existingPath = Path.Combine(_exportDirectory, "doc_fixed.pdf");
+        File.WriteAllText(existingPath, "first-scan-document");
 
-        Assert.True(sameSecondObserved, $"Expected both same-second calls to resolve to one path; got '{firstPath}' and '{secondPath}'.");
+        List<string> files = await _service.SaveAsync(images, config, _scanningContext);
+
+        string secondPath = Assert.Single(files);
+        Assert.NotEqual(existingPath, secondPath);
+        Assert.Matches(@"^doc_fixed_2\.pdf$", Path.GetFileName(secondPath));
         Assert.True(File.Exists(secondPath));
         Assert.True(new FileInfo(secondPath).Length > 0);
+        Assert.Equal("first-scan-document", await File.ReadAllTextAsync(existingPath));
+    }
+
+    [Fact]
+    public async Task SaveAsync_CollidingImagePageNames_GetUniquePathsForEveryPage()
+    {
+        List<ProcessedImage> images = await ImportPagesAsync(2);
+        ScanJobConfiguration config = CreateConfig(ScannerConstants.ExportFormat.JPEG, "doc_fixed");
+
+        // Pre-occupy every default page name of the first attempt; each page must shift onto its
+        // own collision-free path rather than overwrite. (The JPEG export writes ".jpeg" — the
+        // lowercased format constant.)
+        foreach (string occupied in new[] { "doc_fixed_1.jpeg", "doc_fixed_2.jpeg" })
+        {
+            File.WriteAllText(Path.Combine(_exportDirectory, occupied), "first-scan-page");
+        }
+
+        List<string> files = await _service.SaveAsync(images, config, _scanningContext);
+
+        Assert.Equal(2, files.Count);
+        Assert.All(files, file =>
+        {
+            Assert.True(File.Exists(file));
+            Assert.True(new FileInfo(file).Length > 0);
+            Assert.NotEqual("first-scan-page", File.ReadAllText(file));
+        });
+        Assert.Equal(
+            new[] { "doc_fixed_1_2.jpeg", "doc_fixed_2_2.jpeg" },
+            files.Select(file => Path.GetFileName(file)).ToArray());
     }
 
     private async Task<List<ProcessedImage>> ImportPagesAsync(int pageCount)
