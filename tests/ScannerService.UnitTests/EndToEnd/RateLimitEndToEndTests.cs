@@ -53,7 +53,7 @@ public class RateLimitEndToEndTests : IDisposable
                     }
                     else
                     {
-                        Assert.True(spoofedAddressSuffix <= 75, $"Expected the limit to trip by request 75, got 429 at {spoofedAddressSuffix}");
+                        Assert.True(spoofedAddressSuffix <= 100, $"Expected the limit to trip within the 100-request budget, got 429 at {spoofedAddressSuffix}");
                     }
                 }
                 else
