@@ -7,9 +7,33 @@ namespace ScannerService.TrayApp;
 
 internal static class Program
 {
+    /// <summary>Machine-wide single-instance guard. Global scope: a second launch in any user
+    /// session would otherwise silently land on port+1 with its own scanner stack and SQLite
+    /// database, masked by the port-fallback search.</summary>
+    private const string SingleInstanceMutexName = @"Global\ResaaScannerService";
+
     [STAThread]
     private static void Main()
     {
+        // Single-instance guard: hold the named mutex for the process lifetime; a second launch
+        // exits quietly - the first instance's tray icon is already on screen. An abandoned mutex
+        // (a previous instance crashed while owning it) transfers ownership to this wait.
+        using var singleInstanceMutex = new Mutex(initiallyOwned: false, SingleInstanceMutexName);
+        bool acquired;
+        try
+        {
+            acquired = singleInstanceMutex.WaitOne(TimeSpan.Zero);
+        }
+        catch (AbandonedMutexException)
+        {
+            acquired = true;
+        }
+
+        if (!acquired)
+        {
+            return;
+        }
+
         // Check if running as admin
         bool isAdmin = IsRunAsAdministrator();
 

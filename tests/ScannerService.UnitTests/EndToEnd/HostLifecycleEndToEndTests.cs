@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Reflection;
 using System.Net;
 using System.Net.Http;
 using System.Net.NetworkInformation;
@@ -378,12 +379,26 @@ public class HostLifecycleEndToEndTests : IDisposable
 
             Assert.Contains("is not assigned to any network adapter", failure.Message, StringComparison.Ordinal);
             Assert.False(host.IsRunning);
+
+            // FIXED (Phase 2 Batch 3, audit B-3): the failed start must leave nothing behind -
+            // before the fix, StopAsync's !IsRunning gate made the cleanup a silent no-op and the
+            // built host and CTS leaked on every failed start (and every failed rollback).
+            Assert.Null(ReadPrivateField(host, "_app"));
+            Assert.Null(ReadPrivateField(host, "_cts"));
+            Assert.Null(ReadPrivateField(host, "_runTask"));
         }
         finally
         {
             await host.StopAsync();
             host.Dispose();
         }
+    }
+
+    private static object? ReadPrivateField(WebApiHostService host, string fieldName)
+    {
+        FieldInfo field = typeof(WebApiHostService).GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?? throw new InvalidOperationException("Private field " + fieldName + " not found");
+        return field.GetValue(host);
     }
 
     [Fact]

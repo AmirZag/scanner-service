@@ -526,8 +526,22 @@ public class TrayApp : ApplicationContext
 
         try
         {
+            // Dispose cannot join this in-flight restart (it may be blocked in bounded stops),
+            // so every phase re-checks the disposed fence before touching the host. Without
+            // this, a restart that began just before exit could stop the disposing host and
+            // start a brand-new one after Dispose had returned (audit B-5).
+            if (_isDisposed)
+            {
+                return;
+            }
+
             for (int attempt = 1; attempt <= MaxRestartPasses; attempt++)
             {
+                if (_isDisposed)
+                {
+                    return;
+                }
+
                 string? sidecarBefore = _settingsStore.ReadSidecarSnapshot();
                 Result<ScannerServiceConfiguration> effective = _settingsStore.LoadEffectiveConfiguration();
                 if (effective.IsFailure)
@@ -575,8 +589,30 @@ public class TrayApp : ApplicationContext
                     return;
                 }
 
+                if (attempt == MaxRestartPasses)
+                {
+                    // The sidecar write persisted, but no restart pass is left to apply it. No
+                    // dedicated balloon resource exists for this state (adding one needs a resx
+                    // + translation pass), so the warning is log-only until then; the values
+                    // apply on the next process start regardless.
+                    Log.Warning(
+                        "Settings changed again during restart pass {Attempt} of {MaxPasses}; they are persisted and will apply on the next restart",
+                        attempt, MaxRestartPasses);
+                    break;
+                }
+
                 Log.Information("Settings changed while the restart was in flight; applying once more");
             }
+        }
+        catch (Exception restartFailure)
+        {
+            // This restart is fire-and-forget (`_ = RestartHostAsync()`): without this catch a
+            // transient fault (e.g. an IO error on the sidecar snapshot read) would escape as an
+            // unobserved-task exception and the PUT reply's "restarting" promise silently break.
+            // Every reachable failure point here happens before the old host is torn down, so
+            // the running host stays up; the next settings change retries.
+            InitializeLogging();
+            Log.Error(restartFailure, "API host restart failed unexpectedly; keeping the running host");
         }
         finally
         {

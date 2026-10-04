@@ -142,6 +142,35 @@ public sealed class WebApiHostServiceStopPathTests : IDisposable
         }
     }
 
+    // FIXED (Phase 2 Batch 3, audit B-1): StartAsync takes the same transition gate as StopAsync,
+    // so a second start racing an in-flight transition is a logged no-op instead of building a
+    // second host on the same instance.
+    [Fact]
+    public async Task StartAsync_WhenTransitionGateIsAlreadyHeld_ReturnsWithoutStarting()
+    {
+        WebApiHostService host = CreateHost();
+        try
+        {
+            SemaphoreSlim stopGate = ReadStopGate(host);
+            Assert.True(stopGate.Wait(0));
+            try
+            {
+                await host.StartAsync();
+
+                Assert.False(ReadIsRunning(host));
+                Assert.Null(ReadApp(host));
+            }
+            finally
+            {
+                stopGate.Release();
+            }
+        }
+        finally
+        {
+            host.Dispose();
+        }
+    }
+
     private static WebApiHostService CreateHost()
     {
         ScannerServiceConfiguration configuration = new ScannerServiceConfiguration
@@ -158,6 +187,13 @@ public sealed class WebApiHostServiceStopPathTests : IDisposable
         FieldInfo stopGateField = typeof(WebApiHostService).GetField("_stopGate", BindingFlags.NonPublic | BindingFlags.Instance)
             ?? throw new InvalidOperationException("Private field _stopGate not found");
         return (SemaphoreSlim)stopGateField.GetValue(host)!;
+    }
+
+    private static WebApplication? ReadApp(WebApiHostService host)
+    {
+        FieldInfo appField = typeof(WebApiHostService).GetField("_app", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("Private field _app not found");
+        return (WebApplication?)appField.GetValue(host);
     }
 
     private static void WriteField(WebApiHostService host, string fieldName, object? value)

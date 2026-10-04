@@ -87,6 +87,29 @@ public class WebApiHostService : IDisposable
             return;
         }
 
+        // Reentrancy-safe, mirroring StopAsync's gate: two rapid Start calls (a double-clicked
+        // tray menu item, a start racing an in-flight stop) must not build two hosts on one
+        // instance. The zero-timeout makes a concurrent attempt a logged no-op instead of a wait.
+#pragma warning disable S8949 // Deliberately token-free: the transition gate's zero-timeout wait must not be cancellable
+        if (!await _stopGate.WaitAsync(TimeSpan.Zero))
+#pragma warning restore S8949
+        {
+            Log.Warning("Start skipped: another start/stop transition is already in progress");
+            return;
+        }
+
+        try
+        {
+            await StartCoreAsync();
+        }
+        finally
+        {
+            _stopGate.Release();
+        }
+    }
+
+    private async Task StartCoreAsync()
+    {
         try
         {
             // Logging FIRST: on host restarts the old host's Dispose has already flushed the
@@ -335,8 +358,13 @@ public class WebApiHostService : IDisposable
 
             _app.ConfigureAllEndpoints();
 
-            _runTask = _app.RunAsync(_cts?.Token ?? CancellationToken.None);
+            // Await the start so a bind failure throws HERE, where the catches below translate it
+            // into actionable guidance. The old `RunAsync` captured every exception - including
+            // Kestrel's synchronous bind failure - inside the unawaited task, leaving IsRunning
+            // true for a host that never listened and the AddressInUse guidance unreachable.
+            await _app.StartAsync(_cts?.Token ?? CancellationToken.None);
             IsRunning = true;
+            _runTask = _app.WaitForShutdownAsync(_cts?.Token ?? CancellationToken.None);
 
             Log.Information("Scanner Service API started successfully listening on {BindDescription}, port {ActualPort} (requested: {RequestedPort})", _bindTarget.BindDescription, ActualPort, _config.ApiPort);
             Debug.WriteLine(string.Format(CultureInfo.InvariantCulture, WebApiStartedFormat, LocalUrlHost, ActualPort));
@@ -370,16 +398,29 @@ public class WebApiHostService : IDisposable
         }
         catch (Exception ex)
         {
+            // The mapped catches above rethrow; every failure path lands here exactly once.
             Log.Error(ex, "Failed to start Web API binding {BindDescription} (port {ActualPort})", _bindTarget.BindDescription, ActualPort);
             Debug.WriteLine(string.Format(CultureInfo.InvariantCulture, WebApiFailedFormat, ex.Message));
-            await StopAsync();
             throw;
+        }
+        finally
+        {
+            // Gate-free cleanup for every failure path: this runs inside the start transition
+            // while the gate is held, and the old route through StopAsync was a silent no-op on
+            // !IsRunning - leaking the built host and CTS on every failed start or rollback.
+            if (!IsRunning)
+            {
+                await CleanupHostAsync();
+            }
         }
     }
 
     public async Task StopAsync()
     {
-        if (!IsRunning)
+        // The _app check is what makes a failed start cleanable: a start that threw before
+        // IsRunning was set used to make this whole method a silent no-op, leaking the built
+        // host and CTS. A completed stop (both conditions) stays a no-op.
+        if (!IsRunning && _app is null)
         {
             return;
         }
@@ -393,6 +434,24 @@ public class WebApiHostService : IDisposable
 
         try
         {
+            await CleanupHostAsync();
+        }
+        finally
+        {
+            _stopGate.Release();
+        }
+#pragma warning restore S8949
+    }
+
+    /// <summary>
+    /// The actual teardown, shared by StopAsync and the failed-start path (which runs inside the
+    /// start transition's gate and therefore must not go through StopAsync's own gate). Swallows
+    /// its own exceptions: a degraded shutdown must not mask the original failure.
+    /// </summary>
+    private async Task CleanupHostAsync()
+    {
+        try
+        {
             Log.Information("Stopping Scanner Service API");
 
             _cts?.CancelAsync();
@@ -400,6 +459,7 @@ public class WebApiHostService : IDisposable
             if (_runTask != null)
             {
                 // Bound the wait: a wedged in-flight request must not block shutdown indefinitely.
+#pragma warning disable S8949 // Deliberately token-free: the shutdown CTS is already cancelled here and must not void the bound
                 Task winner = await Task.WhenAny(_runTask, Task.Delay(_config.ShutdownTimeoutMs)).ConfigureAwait(false);
 #pragma warning restore S8949
                 if (winner == _runTask)
@@ -412,10 +472,10 @@ public class WebApiHostService : IDisposable
                 }
             }
 
-            // Clean up temporary files before disposing the app. When cancellation let _runTask
-            // run to completion, RunAsync has already disposed the container, so this scope is
-            // unavailable - the sweep is best-effort here and its files are re-swept on the next
-            // successful stop.
+            // Clean up temporary files before disposing the app. When cancellation let the host
+            // task run to completion, its completion already disposed the container, so this
+            // scope is unavailable - the sweep is best-effort here and its files are re-swept on
+            // the next successful stop.
             if (_app != null)
             {
                 try
@@ -426,7 +486,7 @@ public class WebApiHostService : IDisposable
                 }
                 catch (ObjectDisposedException ex)
                 {
-                    Log.Debug(ex, "Temp-file sweep skipped: the host container was already disposed by RunAsync completion");
+                    Log.Debug(ex, "Temp-file sweep skipped: the host container was already disposed by host completion");
                 }
             }
 
@@ -436,6 +496,10 @@ public class WebApiHostService : IDisposable
                 _app = null;
             }
 
+            _cts?.Dispose();
+            _cts = null;
+            _runTask = null;
+
             IsRunning = false;
             Log.Information("Scanner Service API stopped successfully");
             Debug.WriteLine("Web API stopped");
@@ -444,13 +508,6 @@ public class WebApiHostService : IDisposable
         {
             Log.Error(ex, "Error stopping Web API");
             Debug.WriteLine(string.Format(CultureInfo.InvariantCulture, WebApiStopErrorFormat, ex.Message));
-        }
-        finally
-        {
-            _cts?.Dispose();
-            _cts = null;
-            _runTask = null;
-            _stopGate.Release();
         }
     }
 

@@ -8,10 +8,10 @@ using Xunit;
 namespace ScannerService.UnitTests.Infrastructure;
 
 /// <summary>
-/// Tests for the per-driver cool-down tracker (the scanner circuit breaker). Uses tiny
-/// deterministic windows (50 ms base, 100 ms max) with bounded delays of 30-110 ms so every
-/// assertion stays coarse relative to the configured windows and never depends on wall-clock
-/// precision. No scanner drivers are touched.
+/// Tests for the per-driver cool-down tracker (the scanner circuit breaker). Windows are wide
+/// (3 s base, 6 s max) and expiry is asserted by polling with a generous deadline, so no
+/// assertion depends on wall-clock precision under parallel test-host load. "Still cooling"
+/// assertions run well inside the window. No scanner drivers are touched.
 /// </summary>
 public sealed class DriverHealthTrackerTests
 {
@@ -38,8 +38,7 @@ public sealed class DriverHealthTrackerTests
         Assert.True(end.HasValue);
         Assert.Null(tracker.CoolDownEnd(Driver.Wia));
 
-        // Bounded 600 ms wait: the first-timeout window is 500 ms, so it must have expired.
-        await Task.Delay(600);
+        await WaitForExpiryAsync(tracker, Driver.Twain);
 
         // Expiry is evaluated lazily by IsCoolingDown; the stored until-value is intentionally
         // kept (it feeds the next exponential backoff) and is only removed by RecordSuccess.
@@ -55,16 +54,15 @@ public sealed class DriverHealthTrackerTests
         tracker.RecordTimeout(Driver.Twain);
         tracker.RecordTimeout(Driver.Twain);
 
-        // Second window is 2 x 500 = 1000 ms, so it is still cooling after a bounded 600 ms wait;
-        // a window that failed to double (500 ms) would already have expired.
-        await Task.Delay(600);
+        // Second window is 2 x 3000 = 6000 ms; the check runs 1500 ms in, so a window that
+        // failed to double (3000 ms) would have needed to expire within an artificially short
+        // span - the margin makes the doubling observable without tight timing.
+        await Task.Delay(1500);
         Assert.True(tracker.IsCoolingDown(Driver.Twain));
 
-        // A third timeout would produce 2000 ms without the max clamp; clamped to 1000 ms the
-        // window expires within a bounded 1100 ms wait.
+        // A third timeout would produce 6000 ms without the max clamp; clamped to 6000 ms.
         tracker.RecordTimeout(Driver.Twain);
-        await Task.Delay(1100);
-        Assert.False(tracker.IsCoolingDown(Driver.Twain));
+        await WaitForExpiryAsync(tracker, Driver.Twain);
     }
 
     [Fact]
@@ -87,9 +85,9 @@ public sealed class DriverHealthTrackerTests
         tracker.RecordSuccess(Driver.Twain);
         tracker.RecordTimeout(Driver.Twain);
 
-        // After a reset the window is back to the 500 ms base; an unreset counter would have
-        // produced a 1000 ms window that is still cooling after a bounded 600 ms wait.
-        await Task.Delay(600);
+        // After a reset the window is back to the 3000 ms base; an unreset counter would have
+        // produced a 6000 ms window, which is still cooling when the base window expires.
+        await WaitForExpiryAsync(tracker, Driver.Twain);
 
         Assert.False(tracker.IsCoolingDown(Driver.Twain));
     }
@@ -105,9 +103,9 @@ public sealed class DriverHealthTrackerTests
 
         Assert.False(tracker.IsCoolingDown(Driver.Escl));
 
-        // Bounded 600 ms wait: Wia's single-timeout 500 ms window has expired while Twain's
-        // doubled 1000 ms window is still running.
-        await Task.Delay(600);
+        // Wia's single-timeout base window expires while Twain's doubled window is still far
+        // from its end (at least half of it remains when Wia expires).
+        await WaitForExpiryAsync(tracker, Driver.Wia);
 
         Assert.False(tracker.IsCoolingDown(Driver.Wia));
         Assert.True(tracker.IsCoolingDown(Driver.Twain));
@@ -124,14 +122,27 @@ public sealed class DriverHealthTrackerTests
         Assert.Null(tracker.CoolDownEnd(Driver.Sane));
     }
 
+    /// <summary>
+    /// Polls until the driver's cool-down expired, with a deadline wide enough to absorb
+    /// arbitrary parallel test-host stalls; fails if it is still cooling at the deadline.
+    /// </summary>
+    private static async Task WaitForExpiryAsync(DriverHealthTracker tracker, Driver driver)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(12);
+        while (tracker.IsCoolingDown(driver) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100);
+        }
+
+        Assert.False(tracker.IsCoolingDown(driver), $"Expected the {driver} cool-down to expire within the deadline");
+    }
+
     private static ScannerTimeouts CreateTimeouts()
     {
-        // Generous windows: tight millisecond budgets make these tests flaky under parallel
-        // test-host load; the assertions only need base < doubled <= clamped, well separated.
         return new ScannerTimeouts
         {
-            DriverCooldownMs = 500,
-            DriverCooldownMaxMs = 1000
+            DriverCooldownMs = 3000,
+            DriverCooldownMaxMs = 6000
         };
     }
 }

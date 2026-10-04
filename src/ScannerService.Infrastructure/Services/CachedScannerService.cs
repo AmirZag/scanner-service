@@ -98,7 +98,16 @@ public sealed class CachedScannerService : IScannerQueries, IScannerListCache, I
         }
         finally
         {
-            _refreshGate.Release();
+            try
+            {
+                _refreshGate.Release();
+            }
+            catch (ObjectDisposedException ex)
+            {
+                // Container disposal can race an in-flight refresh during shutdown; the process
+                // is going away regardless, so the unwind must not crash on the released gate.
+                _logger.LogDebug(ex, "Refresh gate was already disposed when the refresh finished");
+            }
         }
     }
 

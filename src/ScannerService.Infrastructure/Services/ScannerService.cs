@@ -136,7 +136,17 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         }
         finally
         {
-            _scanGate.Release();
+            try
+            {
+                _scanGate.Release();
+            }
+            catch (ObjectDisposedException ex)
+            {
+                // DisposeAsync can win the shutdown race against an in-flight scan (the stop
+                // drain is bounded in seconds; a scan may run minutes). Releasing a disposed
+                // gate must not crash the unwind - the process is going away regardless.
+                _logger.LogWarning(ex, "Scan gate was already disposed when the scan finished");
+            }
         }
     }
 
@@ -418,10 +428,9 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             _logger.LogWarning(ex, "Failed to dispose scan gate");
         }
 
-        if (_initializer is IAsyncDisposable asyncDisposable)
-        {
-            await asyncDisposable.DisposeAsync();
-        }
+        // The initializer is deliberately NOT disposed here: the DI container registers it as a
+        // container-activated singleton and disposes it itself, so disposing it here too made
+        // every shutdown a double dispose (audit A-9).
 
         await Task.CompletedTask;
     }
