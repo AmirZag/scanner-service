@@ -1,0 +1,47 @@
+# Test-suite style relaxations. The production strictness (warnings-as-errors, full analyzer
+# coverage) is inherited unchanged; the rules below are downgraded ONLY for the test project,
+# each with its reason. Everything not listed here behaves exactly like production code.
+
+[*.cs]
+
+# Tests prefer explicit types everywhere (grep-ability); IDE0007 would force var on every
+# obvious-construction line.
+dotnet_diagnostic.IDE0007.severity = none
+
+# Object initializers / using-declarations / default-literal / parens / auto-properties are
+# authoring-convenience preferences; test bodies favor explicit step-by-step setup.
+dotnet_diagnostic.IDE0017.severity = none
+dotnet_diagnostic.IDE0031.severity = none
+dotnet_diagnostic.IDE0032.severity = none
+dotnet_diagnostic.IDE0034.severity = none
+dotnet_diagnostic.IDE0047.severity = none
+dotnet_diagnostic.IDE0063.severity = none
+
+# CA1001: xUnit test classes release disposable fields through IAsyncLifetime/IDisposable
+# teardown, which the rule does not recognize.
+dotnet_diagnostic.CA1001.severity = none
+
+# CA2000: in tests, ownership of created objects is usually handed to the SUT, a fixture, or a
+# DI container; the rule's escape analysis is false-positive-prone here.
+dotnet_diagnostic.CA2000.severity = none
+
+# CA1305/CA1869: culture-sensitive formatting and per-call JsonSerializerOptions are irrelevant
+# at test scale on invariant test data.
+dotnet_diagnostic.CA1305.severity = none
+dotnet_diagnostic.CA1869.severity = none
+
+# S4144: intentionally separate test methods may share a body when the method NAME documents a
+# different scenario (e.g. loopback token variants).
+dotnet_diagnostic.S4144.severity = none
+
+# S6618: string.Create micro-optimization has no place in assertion messages.
+dotnet_diagnostic.S6618.severity = none
+
+# S6966: tests deliberately use synchronous small-file/HTTP helpers for readable arrange steps.
+dotnet_diagnostic.S6966.severity = none
+
+# S8969: null-forgiving operators document test intent where flow analysis already knows.
+dotnet_diagnostic.S8969.severity = none
+
+# Fault-injection probes legitimately throw from Dispose to exercise cleanup paths.
+dotnet_diagnostic.S3877.severity = none

@@ -12,4 +12,7 @@
     <Project Path="src/ScannerService.Infrastructure/ScannerService.Infrastructure.csproj" Id="605ebc68-bcfb-4335-84a8-96025aa2c97d" />
     <Project Path="src/ScannerService.TrayApp/ScannerService.TrayApp.csproj" Id="d617f1e3-8cf3-4b9d-8c28-5fa8d0c0dcae" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ScannerService.UnitTests/ScannerService.Tests.csproj" />
+  </Folder>
 </Solution>

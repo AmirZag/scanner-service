@@ -241,8 +241,18 @@ The project enforces strict code quality:
 
 ### Running Tests
 
+The unit/integration/E2E suite lives in `tests/ScannerService.UnitTests`:
+
 ```bash
 dotnet test
+```
+
+With line coverage (gate: 100% of coverable lines, minus the documented exclusions in
+`tests/Check-Coverage.ps1`):
+
+```powershell
+dotnet test tests/ScannerService.UnitTests --collect:"XPlat Code Coverage" --settings tests/coverage.runsettings
+powershell -NoProfile -File tests/Check-Coverage.ps1
 ```
 
 ## API Documentation

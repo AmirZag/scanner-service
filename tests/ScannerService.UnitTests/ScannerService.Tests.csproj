@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0-windows</TargetFramework>
+		<UseWindowsForms>true</UseWindowsForms>
+		<IsPackable>false</IsPackable>
+		<!-- Test names follow Method_Scenario_Expectation; underscore identifiers are idiomatic in tests. -->
+		<NoWarn>$(NoWarn);CA1707</NoWarn>
+		<!-- Public test classes/methods are xUnit convention; they are not public API surface. -->
+		<NoWarn>$(NoWarn);CA1515</NoWarn>
+		<!-- Theory arguments are supplied by the test framework; entry-point null validation is noise in tests. -->
+		<NoWarn>$(NoWarn);CA1062</NoWarn>
+		<!-- Tests run on framework-managed contexts; ConfigureAwait(false) adds noise without value here. -->
+		<NoWarn>$(NoWarn);CA2007</NoWarn>
+		<!-- Inline constant arrays in Theory/Assert calls are the idiomatic test shape. -->
+		<NoWarn>$(NoWarn);CA1861</NoWarn>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- LocalSettingsStore.LoadBaseConfiguration and WebApiHostService read appsettings.json
+		     from AppContext.BaseDirectory; content files do not flow through ProjectReferences,
+		     so the test bin needs its own copy. -->
+		<Content Include="..\..\src\ScannerService.TrayApp\appsettings.json" Link="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="coverlet.collector" />
+		<PackageReference Include="Microsoft.AspNetCore.TestHost" />
+		<PackageReference Include="Microsoft.NET.Test.Sdk" />
+		<PackageReference Include="xunit" />
+		<PackageReference Include="xunit.runner.visualstudio" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\src\ScannerService.Application\ScannerService.Application.csproj" />
+		<ProjectReference Include="..\..\src\ScannerService.Domain\ScannerService.Domain.csproj" />
+		<ProjectReference Include="..\..\src\ScannerService.Infrastructure\ScannerService.Infrastructure.csproj" />
+		<ProjectReference Include="..\..\src\ScannerService.TrayApp\ScannerService.TrayApp.csproj" />
+	</ItemGroup>
+
+</Project>

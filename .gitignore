@@ -364,3 +364,6 @@ FodyWeavers.xsd
 *.exe
 /InstallerOutput
 /.regression-tmp
+
+# Test run outputs (trx, coverage)
+TestResults/

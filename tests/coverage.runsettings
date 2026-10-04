@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <Format>json,cobertura</Format>
+          <!-- Generated resource designer code is not hand-maintained. -->
+          <!-- TrayApp.cs and Program.cs are the WinForms shell (tray icon, menus, message loop,
+               process entry). Their logic is driven through the Windows message loop and UAC
+               elevation, which unit tests cannot host; the lifecycle bugs the Phase 1 audit
+               found there (Documents/Audits/2026-10-03-phase1-audit.md, A-1/B-5) are tracked
+               as Phase 2 refactor candidates (extract RestartHostAsync into a testable
+               service), not as uncovered lines. -->
+          <ExcludeByFile>**/TrayApp.cs,**/Program.cs,**/Resources.Designer.cs,**/*.g.cs</ExcludeByFile>
+          <!-- The gate measures production modules; the test assembly itself is not counted. -->
+          <IncludeTestAssembly>false</IncludeTestAssembly>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>
