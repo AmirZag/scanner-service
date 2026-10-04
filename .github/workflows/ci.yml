@@ -66,19 +66,24 @@ jobs:
         # failure detail is readable from the public checks API without downloading logs.
         shell: pwsh
         run: |
-          dotnet test tests/ScannerService.UnitTests/ScannerService.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage" --settings tests/coverage.runsettings --logger trx
+          dotnet test tests/ScannerService.UnitTests/ScannerService.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage" --settings tests/coverage.runsettings --logger trx --blame --blame-crash 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/test-console.log"
           $exit = $LASTEXITCODE
           if ($exit -ne 0) {
-            $trx = Get-ChildItem 'tests/ScannerService.UnitTests/TestResults' -Filter '*.trx' -Recurse |
+            # Crash-shaped failures (native fault / OOM) leave empty TRX messages or no
+            # failed entries at all, so also surface the console tail and the blame
+            # sequence (test in flight at host exit) as annotations - both are readable
+            # from the public checks API without repo credentials.
+            $runDir = Get-ChildItem 'tests/ScannerService.UnitTests/TestResults' -Directory |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            $trx = Get-ChildItem $runDir.FullName -Filter '*.trx' -Recurse | Select-Object -First 1
             if ($trx) {
               [xml] $doc = Get-Content -Raw $trx.FullName
               $failed = @($doc.TestRun.Results.UnitTestResult | Where-Object { $_.outcome -eq 'Failed' })
-              Write-Host "Failed tests: $($failed.Count)"
+              Write-Host "Failed tests recorded in TRX: $($failed.Count)"
               foreach ($result in ($failed | Select-Object -First 10)) {
                 $message = [string] $result.Message
                 if ([string]::IsNullOrWhiteSpace($message)) { $message = [string] $result.StackTrace }
-                if ([string]::IsNullOrWhiteSpace($message)) { $message = '(no message or stack in TRX)' }
+                if ([string]::IsNullOrWhiteSpace($message)) { $message = '(no message or stack in TRX - likely a host crash)' }
                 $message = ($message -replace '\r?\n', ' ')
                 if ($message.Length -gt 1200) { $message = $message.Substring(0, 1200) }
                 Write-Host "FAILED TEST: $($result.testName)"
@@ -86,6 +91,15 @@ jobs:
                 Write-Host "::error::$($result.testName) - $message"
               }
             }
+            $seq = Get-ChildItem $runDir.FullName -Filter 'Sequence.xml' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($seq) {
+              $seqText = ((Get-Content -Raw $seq.FullName) -replace '\r?\n', ' ')
+              if ($seqText.Length -gt 1500) { $seqText = $seqText.Substring($seqText.Length - 1500) }
+              Write-Host "::error::BLAME sequence (last test in flight): $seqText"
+            }
+            $tail = (Get-Content "$env:RUNNER_TEMP/test-console.log" -Tail 20) -join ' | '
+            if ($tail.Length -gt 3500) { $tail = $tail.Substring($tail.Length - 3500) }
+            Write-Host "::error::dotnet test console tail: $tail"
           }
           exit $exit
 
@@ -105,4 +119,5 @@ jobs:
           path: |
             tests/ScannerService.UnitTests/TestResults/**/*.trx
             tests/ScannerService.UnitTests/TestResults/**/coverage.json
+            tests/ScannerService.UnitTests/TestResults/**/Sequence.xml
           if-no-files-found: ignore
