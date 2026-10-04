@@ -82,14 +82,14 @@ public class HostLifecycleEndToEndTests : IDisposable
     }
 
     [Fact]
-    public async Task GetDetailedHealth_WithMachineDependencies_CurrentBehavior_AlwaysReturns200()
+    public async Task GetDetailedHealth_WithMachineDependencies_StatusMatchesDependencyHealth()
     {
-        // KNOWN BUG AR-1: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // The handler writes Response.StatusCode = 503 for the unhealthy branch and then returns
-        // TypedResults.Ok(result), whose execution overwrites the status with 200 - so the
-        // documented 503 never reaches clients. On a scannerless machine this request runs the
-        // unhealthy branch (Scanners dependency false); after the fix, assert
-        // HttpStatusCode.ServiceUnavailable here for that case.
+        // FIXED (audit AR-1): the status is carried by the result itself (200 healthy /
+        // 503 unhealthy via TypedResults.Json), replacing the previously pinned always-200
+        // behavior. Whether the host is healthy depends on the machine it runs on - a LAN
+        // with discoverable eSCL devices yields a healthy Scanners dependency while a
+        // scannerless CI VM does not - so the status is asserted against the reported
+        // dependencies rather than a fixed code, keeping the test environment-independent.
         ScannerServiceConfiguration configuration = EndToEndHostFactory.CreateTestConfiguration(EndToEndHostFactory.FindFreeLoopbackPort());
         WebApiHostService host = await EndToEndHostFactory.StartHostAsync(configuration);
         try
@@ -100,7 +100,14 @@ public class HostLifecycleEndToEndTests : IDisposable
             using JsonDocument document = JsonDocument.Parse(payload);
             JsonElement root = document.RootElement;
 
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            bool allHealthy = true;
+            foreach (JsonProperty dependency in root.GetProperty("dependencies").EnumerateObject())
+            {
+                allHealthy &= dependency.Value.GetBoolean();
+            }
+
+            HttpStatusCode expected = allHealthy ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable;
+            Assert.Equal(expected, response.StatusCode);
             Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("version").GetString()));
             Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("correlationId").GetString()));
             Assert.Equal(JsonValueKind.Object, root.GetProperty("dependencies").ValueKind);
