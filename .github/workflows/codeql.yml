@@ -33,9 +33,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
+        # Shallow default is fine here: build-mode none never runs MSBuild, so the
+        # SetVersionFromGitCommitCount target never executes and no history is needed
+        # (unlike ci.yml and release.yml, which must use fetch-depth: 0).
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Setup .NET 10 SDK
         # Not required by build-mode: none, but pins the SDK deterministically and becomes

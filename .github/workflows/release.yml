@@ -1,0 +1,92 @@
+# Release: on a v* tag push, re-run the full quality gate (strict build + tests + coverage
+# gate), produce the Inno Setup installer, and publish a GitHub Release with the installer
+# attached.
+#
+# The installer version comes from the assembly version, which Directory.Build.props derives
+# from `git rev-list --count HEAD` - hence the full checkout below.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build installer and publish release
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history: the assembly version (and therefore the installer filename) is
+          # stamped from the git commit count; a shallow clone would produce 1.1.0.1.
+          fetch-depth: 0
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v6
+        with:
+          path: ~\.nuget\packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore ScannerService.slnx
+
+      - name: Build
+        run: dotnet build ScannerService.slnx -c Release --no-restore
+
+      - name: Test with coverage collection
+        # A release can point at any commit, so the full quality gate re-runs here rather
+        # than trusting that CI already passed on the tagged commit.
+        run: 'dotnet test tests/ScannerService.UnitTests/ScannerService.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage" --settings tests/coverage.runsettings --logger trx'
+
+      - name: Coverage gate
+        shell: pwsh
+        run: ./tests/Check-Coverage.ps1
+
+      - name: Publish TrayApp (self-contained win-x64)
+        # Mirrors build-installer.ps1 exactly so Installer.iss's PublishDir define resolves.
+        # PublishSingleFile=false keeps NAPS2.Worker.exe (the TWAIN worker) as a separate
+        # file next to the exe - the installer ships it individually.
+        # No --no-build here: the RID-specific graph is built by publish itself.
+        run: dotnet publish src/ScannerService.TrayApp/ScannerService.TrayApp.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=false /p:PublishReadyToRun=true --output "src/ScannerService.TrayApp/bin/Release/net10.0-windows/publish/win-x64"
+
+      - name: Remove PDBs from publish output
+        shell: pwsh
+        run: Remove-Item 'src/ScannerService.TrayApp/bin/Release/net10.0-windows/publish/win-x64/*.pdb' -Force -ErrorAction SilentlyContinue
+
+      - name: Compile installer (Inno Setup)
+        # ISCC 6.7.1 is preinstalled on the runner image but not on PATH; this is the same
+        # first candidate path build-installer.ps1 probes for local builds.
+        shell: pwsh
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Installer.iss'
+
+      - name: Read installer version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Get-Item 'src/ScannerService.TrayApp/bin/Release/net10.0-windows/publish/win-x64/ScannerService.TrayApp.exe').VersionInfo.FileVersion
+          Write-Host "Assembly version: $v"
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Resaa Scanner Service ${{ steps.version.outputs.version }}
+          files: InstallerOutput/ResaaScannerSetup_*.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true

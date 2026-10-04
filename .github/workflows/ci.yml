@@ -74,7 +74,9 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: test-results-${{ github.run_id }}
+          # run_attempt keeps re-run attempts from colliding with the immutable artifact
+          # of the same run_id (upload-artifact errors with 409 on "Re-run failed jobs").
+          name: test-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             tests/ScannerService.UnitTests/TestResults/**/*.trx
             tests/ScannerService.UnitTests/TestResults/**/coverage.json
