@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.EntityFrameworkCore;
 using ScannerService.Application.Common;
 using ScannerService.Application.DTOs;
 using ScannerService.Application.Interfaces;
@@ -84,14 +85,13 @@ public static class EndpointConfigurationExtensions
                 ? DetailedApiHealthCheckDto.Healthy(ApiVersion, dependencies, correlationId)
                 : DetailedApiHealthCheckDto.Unhealthy(ApiVersion, dependencies, correlationId);
 
-            if (isHealthy)
-            {
-                return TypedResults.Ok(result);
-            }
-
-            // For unhealthy status, return 503 with the error details
-            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            return TypedResults.Ok(result);
+            // The status must be carried by the result itself: a manually assigned
+            // Response.StatusCode is overwritten by TypedResults.Ok's executor, which always
+            // writes 200 (audit AR-1). Both branches use TypedResults.Json so the handler has a
+            // single return type - mixing Ok and Json breaks the lambda's type inference.
+            return TypedResults.Json(result, statusCode: isHealthy
+                ? StatusCodes.Status200OK
+                : StatusCodes.Status503ServiceUnavailable);
         })
         .WithName("GetDetailedHealth")
         .WithTags("Health")
@@ -157,12 +157,24 @@ public static class EndpointConfigurationExtensions
                 return Results.ValidationProblem(validationResult.ToDictionary());
             }
 
-            var p = await svc.AddAsync(req, ct);
-            return Results.Created($"/api/profiles/{p.Id}", p);
+            ProfileDto created;
+            try
+            {
+                created = await svc.AddAsync(req, ct);
+            }
+            catch (DbUpdateException)
+            {
+                // The unique Profiles.Name index rejects a concurrent duplicate; translate the
+                // EF failure instead of surfacing a raw 500 (audit F-24).
+                return Results.Conflict(new { error = "A profile with this name already exists" });
+            }
+
+            return Results.Created($"/api/profiles/{created.Id}", created);
         })
         .WithName("CreateProfile")
         .WithTags("Profiles")
         .Produces(StatusCodes.Status201Created)
+        .Produces(StatusCodes.Status409Conflict)
         .ProducesValidationProblem()
         .Accepts<UpsertProfileDto>("application/json");
 

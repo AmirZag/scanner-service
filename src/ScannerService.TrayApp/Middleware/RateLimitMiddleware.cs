@@ -100,13 +100,9 @@ public class RateLimitMiddleware
 
     private static string GetClientIp(HttpContext context)
     {
-        // Try to get IP from X-Forwarded-For header first (for proxy scenarios)
-        if (context.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor) && forwardedFor.Count > 0)
-        {
-            return forwardedFor.ToString();
-        }
-
-        // Fall back to remote IP
+        // Kestrel is the edge here - no proxy exists in this deployment, so a client-controlled
+        // X-Forwarded-For header carries no legitimate signal and would let anyone rotate the
+        // rate-limit key per request. Identity is the connection's remote address only.
         return context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
     }
 

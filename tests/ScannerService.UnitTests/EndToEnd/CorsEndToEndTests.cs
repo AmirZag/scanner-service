@@ -22,13 +22,12 @@ public class CorsEndToEndTests : IDisposable
     }
 
     [Fact]
-    public async Task OptionsPreflight_WithArbitraryForeignOrigin_CurrentBehavior_ReflectsOriginWithCredentials()
+    public async Task OptionsPreflight_WithArbitraryForeignOrigin_ReflectsOriginWithoutCredentials()
     {
-        // KNOWN BUG S-2: pins current (buggy) behavior; flip these assertions when the bug is fixed.
-        // The default CORS policy allows every origin (SetIsOriginAllowed(_ => true)) together with
-        // AllowCredentials on an unauthenticated API, so any web page gets its own origin echoed and
-        // preflight approval for PUT/DELETE. After the fix, the foreign origin must be refused:
-        // assert that Access-Control-Allow-Origin (and -Credentials) are absent instead.
+        // FIXED (Phase 2 Batch 4, audit S-2): AllowCredentials was removed from the default policy
+        // (the API is unauthenticated by design, so credentialed cross-origin reads bought nothing
+        // and gave every web page cookie-flavored reach). Origins stay allow-all for local tools;
+        // the preflight still approves the request, but never advertises credentials.
         ScannerServiceConfiguration configuration = EndToEndHostFactory.CreateTestConfiguration(EndToEndHostFactory.FindFreeLoopbackPort());
         WebApiHostService host = await EndToEndHostFactory.StartHostAsync(configuration);
         try
@@ -42,7 +41,7 @@ public class CorsEndToEndTests : IDisposable
 
             Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
             Assert.Equal("http://evil.example", Assert.Single(response.Headers.GetValues("Access-Control-Allow-Origin")));
-            Assert.Equal("true", Assert.Single(response.Headers.GetValues("Access-Control-Allow-Credentials")));
+            Assert.False(response.Headers.Contains("Access-Control-Allow-Credentials"), "AllowCredentials must stay off the unauthenticated API");
         }
         finally
         {

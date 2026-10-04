@@ -32,17 +32,19 @@ public class ScanRequestValidatorTests
         Assert.Empty(result.Errors);
     }
 
-    // KNOWN BUG C-1d: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-    // ScanRequestValidator checks only ProfileId, so an arbitrary Format string is accepted and
-    // later becomes the output file extension, bypassing the format whitelist the settings path
-    // enforces (ExportSettingValidator.AllowedFormats).
+    // FIXED (Phase 2 Batch 4, audit C-1d): the Format whitelist is enforced, so an arbitrary
+    // string can no longer become the output file extension. Null still passes (keep the export
+    // setting's configured format).
     [Fact]
-    public void Validate_ArbitraryFormat_CurrentBehavior_IsAccepted()
+    public void Validate_ArbitraryFormat_IsRejected()
     {
         ScanRequestValidator validator = new ScanRequestValidator();
 
         ValidationResult result = validator.Validate(new ScanRequestDto(1, @"C:\evil", "evil"));
 
-        Assert.True(result.IsValid);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, failure => failure.ErrorMessage == "Format must be one of: PDF, JPEG, PNG, TIFF, MultiPageTIFF");
+
+        Assert.True(validator.Validate(new ScanRequestDto(1, @"C:\evil", null)).IsValid);
     }
 }

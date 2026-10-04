@@ -136,13 +136,11 @@ public class SettingsEndToEndTests : IDisposable
     }
 
     [Fact]
-    public async Task PutSettings_WithNullEsclManualDevices_CurrentBehavior_ReturnsServerError()
+    public async Task PutSettings_WithNullEsclManualDevices_Returns400()
     {
-        // KNOWN BUG C-1b: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // ScannerSettingsValidator chains .Must(devices => devices.Count ...) after .NotNull() on
-        // EsclManualDevices, and FluentValidation's default cascade still runs the later
-        // predicates, so a null list throws inside the validator and surfaces as an opaque 500.
-        // After the fix, assert HttpStatusCode.BadRequest (a 400 ValidationProblem) instead.
+        // FIXED (Phase 2 Batch 4, audit C-1b): the validator's list predicates are null-tolerant,
+        // so a null list surfaces as a 400 ValidationProblem instead of an opaque 500, and
+        // nothing is persisted.
         ScannerServiceConfiguration configuration = EndToEndHostFactory.CreateTestConfiguration(EndToEndHostFactory.FindFreeLoopbackPort());
         WebApiHostService host = await EndToEndHostFactory.StartHostAsync(configuration);
         try
@@ -154,7 +152,7 @@ public class SettingsEndToEndTests : IDisposable
                 EndToEndHostFactory.SettingsRelativeUrl,
                 new StringContent(requestJson, Encoding.UTF8, "application/json"));
 
-            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             Assert.False(File.Exists(EndToEndBinState.SidecarPath));
         }
         finally

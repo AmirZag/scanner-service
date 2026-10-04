@@ -121,17 +121,18 @@ public sealed class ExportSettingsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PutExportSettings_NullFileName_ThrowsNullReference_CurrentBehavior()
+    public async Task PutExportSettings_NullFileName_Returns400WithFileNameKey()
     {
-        // KNOWN BUG C-1a: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // ExportSettingValidator chains its Must() predicates with the default Continue cascade,
-        // so a null fileName still reaches IndexOfAny inside the second predicate and throws
-        // NullReferenceException (surfacing as a server exception instead of a 400). Once fixed,
-        // the PUT must return a 400 validation problem instead of throwing.
-        await Assert.ThrowsAsync<NullReferenceException>(
-            () => TestApiHost.PutJsonAsync(
-                _client,
-                "/api/export-settings",
-                """{"format": "PDF", "exportPath": "", "fileName": null}"""));
+        // FIXED (Phase 2 Batch 4, audit C-1a): the validator's predicates are null-tolerant, so a
+        // null fileName surfaces as a 400 validation problem instead of a server exception.
+        using HttpResponseMessage response = await TestApiHost.PutJsonAsync(
+            _client,
+            "/api/export-settings",
+            """{"format": "PDF", "exportPath": "", "fileName": null}""");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Dictionary<string, string[]> problems = await TestApiHost.ReadValidationProblemsAsync(response);
+        Assert.True(problems.TryGetValue("FileName", out string[]? messages));
+        Assert.NotNull(messages);
     }
 }

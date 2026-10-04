@@ -202,32 +202,32 @@ public sealed class ProfileEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PostProfile_EmptyDeviceId_IsAccepted_CurrentBehavior()
+    public async Task PostProfile_EmptyDeviceId_Returns400()
     {
-        // KNOWN BUG C-1c: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // UpsertProfileValidator has no DeviceId rule (UpdateProfileValidator does), so POSTing an
-        // empty deviceId creates a profile that can never scan. Once the rule exists this must
-        // assert HttpStatusCode.BadRequest (400) instead of Created (201).
+        // FIXED (Phase 2 Batch 4, audit C-1c): UpsertProfileValidator now enforces the DeviceId
+        // rule, so an empty device id is rejected instead of creating a profile that can never scan.
         using HttpResponseMessage response = await TestApiHost.PostJsonAsync(
             _client, "/api/profiles", """{"name": "No Device", "deviceId": ""}""");
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        ProfileDto created = await TestApiHost.ReadJsonAsync<ProfileDto>(response);
-        Assert.Equal(string.Empty, created.DeviceId);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Dictionary<string, string[]> problems = await TestApiHost.ReadValidationProblemsAsync(response);
+        Assert.True(problems.TryGetValue("DeviceId", out string[]? messages));
+        Assert.NotNull(messages);
     }
 
     [Fact]
-    public async Task PostProfile_DuplicateName_ThrowsDbUpdateException_CurrentBehavior()
+    public async Task PostProfile_DuplicateName_Returns409Conflict()
     {
-        // KNOWN BUG F-24: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // The unique index on Profile.Name turns the second POST into a raw DbUpdateException that
-        // escapes the endpoint; TestServer propagates handler exceptions to the awaiting client.
-        // Once fixed (pre-check or catch mapped to 400/409), the second POST must return a status
-        // code instead of throwing.
+        // FIXED (Phase 2 Batch 4, audit F-24): the endpoint translates the unique-index
+        // DbUpdateException into a 409 Conflict with a friendly error body.
         await CreateProfileAsync("""{"name": "Duplicate Name", "deviceId": "device-1"}""");
 
-        await Assert.ThrowsAsync<DbUpdateException>(
-            () => TestApiHost.PostJsonAsync(_client, "/api/profiles", """{"name": "Duplicate Name", "deviceId": "device-2"}"""));
+        using HttpResponseMessage response = await TestApiHost.PostJsonAsync(
+            _client, "/api/profiles", """{"name": "Duplicate Name", "deviceId": "device-2"}""");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        string error = await TestApiHost.ReadErrorAsync(response);
+        Assert.Contains("already exists", error, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -107,7 +107,8 @@ public sealed class HealthEndpointTests : IAsyncLifetime
         {
             using HttpResponseMessage response = await brokenDatabaseFixture.Client.GetAsync("/api/health/detailed");
 
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            // FIXED (Phase 2 Batch 4, audit AR-1): unhealthy dependencies return the documented 503.
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
             DetailedApiHealthCheckDto payload = await TestApiHost.ReadJsonAsync<DetailedApiHealthCheckDto>(response);
             Assert.False(payload.IsHealthy);
             Assert.False(payload.Dependencies["Database"]);
@@ -144,7 +145,8 @@ public sealed class HealthEndpointTests : IAsyncLifetime
         {
             using HttpResponseMessage response = await disposedDatabaseFixture.Client.GetAsync("/api/health/detailed");
 
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            // FIXED (Phase 2 Batch 4, audit AR-1): unhealthy dependencies return the documented 503.
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
             DetailedApiHealthCheckDto payload = await TestApiHost.ReadJsonAsync<DetailedApiHealthCheckDto>(response);
             Assert.False(payload.IsHealthy);
             Assert.False(payload.Dependencies["Database"]);
@@ -157,18 +159,15 @@ public sealed class HealthEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task GetDetailedHealth_ScannerDependencyDown_StillReturns200_CurrentBehavior()
+    public async Task GetDetailedHealth_ScannerDependencyDown_Returns503()
     {
-        // KNOWN BUG AR-1: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // The handler assigns Response.StatusCode = 503 for unhealthy dependencies but then
-        // returns TypedResults.Ok(result), whose execution overwrites the status back to 200 -
-        // the documented 503 contract is never met. Once fixed, this must assert
-        // HttpStatusCode.ServiceUnavailable (503) instead of OK.
+        // FIXED (Phase 2 Batch 4, audit AR-1): the status is carried by TypedResults.Json, so the
+        // documented 503 contract is met when a dependency is unhealthy.
         _scannerQueries.ThrowOnCall = true;
 
         using HttpResponseMessage response = await _client.GetAsync("/api/health/detailed");
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         DetailedApiHealthCheckDto payload = await TestApiHost.ReadJsonAsync<DetailedApiHealthCheckDto>(response);
         Assert.False(payload.IsHealthy);
         Assert.False(payload.Dependencies["Scanners"]);

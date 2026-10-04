@@ -23,19 +23,22 @@ public class ScannerSettingsValidator : AbstractValidator<ScannerSettingsDto>
         // Rules are expressed on the LIST (not per-element) so a null entry — which fails the
         // null check — can never reach a property access (entry.Address) and NRE inside the
         // validator (which would surface as an opaque 500 instead of a 400).
+        // The NotNull rule reports a missing list, and every Must is null-tolerant: with
+        // FluentValidation's default Continue cascade the predicates still run on null, and an
+        // unguarded dereference surfaced as an opaque 500 instead of a 400 (audit C-1b).
         RuleFor(dto => dto.EsclManualDevices)
             .NotNull()
             .WithMessage("EsclManualDevices is required (send an empty array if there are none)")
-            .Must(devices => devices.Count <= MaxManualDeviceCount)
+            .Must(devices => devices == null || devices.Count <= MaxManualDeviceCount)
             .WithMessage($"EsclManualDevices must contain at most {MaxManualDeviceCount} entries")
-            .Must(devices => devices.All(device => device != null))
+            .Must(devices => devices == null || devices.All(device => device != null))
             .WithMessage("EsclManualDevices must not contain null entries")
-            .Must(devices => devices.Where(device => device != null).All(device =>
+            .Must(devices => devices == null || devices.Where(device => device != null).All(device =>
                 !string.IsNullOrWhiteSpace(device.Address)
                 && device.Address.Length <= MaxDeviceAddressLength
                 && device.Address.All(character => !char.IsControl(character))))
             .WithMessage($"Each EsclManualDevices entry needs a non-empty Address (max {MaxDeviceAddressLength} characters, no control characters)")
-            .Must(devices => devices.Where(device => device != null).All(device =>
+            .Must(devices => devices == null || devices.Where(device => device != null).All(device =>
                 device.Name == null || device.Name.Length <= MaxDeviceNameLength && device.Name.All(character => !char.IsControl(character))))
             .WithMessage($"Each EsclManualDevices entry Name must be at most {MaxDeviceNameLength} characters with no control characters");
     }

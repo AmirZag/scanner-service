@@ -39,23 +39,21 @@ public class ScannerSettingsValidatorTests
         Assert.True(result.IsValid);
     }
 
-    // KNOWN BUG C-1b: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-    // The list rules are chained after NotNull with the default Continue cascade, so with
-    // "esclManualDevices": null the NotNull failure does not stop the following Must predicates,
-    // the first one dereferences the null list, and PUT /api/settings surfaces as a 500 instead
-    // of the intended 400 - contradicting the validator's own NRE-avoidance design comment.
+    // FIXED (Phase 2 Batch 4, audit C-1b): every Must predicate is null-tolerant, so a null
+    // list surfaces as the NotNull validation failure instead of a NullReferenceException
+    // (FluentValidation's Continue cascade runs the predicates even after NotNull failed).
     [Fact]
-    public void Validate_NullEsclManualDevices_CurrentBehavior_ThrowsNullReferenceException()
+    public void Validate_NullEsclManualDevices_IsRejectedWithRequiredMessage()
     {
         ScannerSettingsValidator validator = new ScannerSettingsValidator();
 
         ScannerSettingsDto dto = new ScannerSettingsDto();
         dto.EsclManualDevices = null!;
 
-        Assert.Throws<NullReferenceException>(() =>
-        {
-            validator.Validate(dto);
-        });
+        ValidationResult result = validator.Validate(dto);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, failure => failure.ErrorMessage.StartsWith("EsclManualDevices is required", StringComparison.Ordinal));
     }
 
     [Fact]

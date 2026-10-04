@@ -23,20 +23,21 @@ public class RateLimitEndToEndTests : IDisposable
     }
 
     [Fact]
-    public async Task GetHealth_WithUniqueForwardedForValues_CurrentBehavior_BypassesRateLimit()
+    public async Task GetHealth_WithUniqueForwardedForValues_LimitStillApplies()
     {
-        // KNOWN BUG S-1: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // RateLimitMiddleware keys every request that carries X-Forwarded-For into its own bucket,
-        // so one client can outrun the 100-requests-per-minute limit by rotating header values.
-        // With 105 unique values each request lands in a fresh bucket and every response is 200;
-        // after the fix (keying on RemoteIpAddress only), requests 101..105 share the single
-        // loopback bucket and return 429 TooManyRequests - assert that here instead.
+        // FIXED (Phase 2 Batch 4, audit S-1): the limiter keys on the connection's remote address
+        // only, so rotating X-Forwarded-For values no longer buys fresh buckets - requests
+        // 101..105 share the single loopback bucket and return 429 TooManyRequests.
         ScannerServiceConfiguration configuration = EndToEndHostFactory.CreateTestConfiguration(EndToEndHostFactory.FindFreeLoopbackPort());
         WebApiHostService host = await EndToEndHostFactory.StartHostAsync(configuration);
         try
         {
             using HttpClient client = EndToEndHostFactory.CreateClient(host.ActualPort);
 
+            // The startup health poll shares the loopback bucket, so the exact request index of
+            // the first 429 varies by a few: assert that it lands within the expected band and
+            // that every request after it stays limited.
+            int firstLimitedIndex = -1;
             for (int spoofedAddressSuffix = 1; spoofedAddressSuffix <= 105; spoofedAddressSuffix++)
             {
                 using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, EndToEndHostFactory.HealthRelativeUrl);
@@ -44,8 +45,24 @@ public class RateLimitEndToEndTests : IDisposable
 
                 using HttpResponseMessage response = await client.SendAsync(request);
 
-                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                if (firstLimitedIndex < 0)
+                {
+                    if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                    {
+                        firstLimitedIndex = spoofedAddressSuffix;
+                    }
+                    else
+                    {
+                        Assert.True(spoofedAddressSuffix <= 75, $"Expected the limit to trip by request 75, got 429 at {spoofedAddressSuffix}");
+                    }
+                }
+                else
+                {
+                    Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+                }
             }
+
+            Assert.InRange(firstLimitedIndex, 75, 105);
         }
         finally
         {

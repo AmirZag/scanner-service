@@ -16,6 +16,12 @@ public class UpsertProfileValidator : AbstractValidator<UpsertProfileDto>
             .NotEmpty().WithMessage("Profile Name Is Required")
             .MaximumLength(100).WithMessage("Profile name must not exceed 100 characters");
 
+        // Mirror UpdateProfileValidator: an empty DeviceId would create a profile that can never
+        // scan (audit C-1c found POST accepting what PATCH rejected).
+        RuleFor(x => x.DeviceId)
+            .NotEmpty().WithMessage("DeviceId cannot be empty or whitespace")
+            .When(x => x.DeviceId != null);
+
         RuleFor(x => x.PaperSource)
             .Must(AllowedPaperSource.Contains)
             .WithMessage("PaperSource must be either 'Glass' or 'Feeder'");

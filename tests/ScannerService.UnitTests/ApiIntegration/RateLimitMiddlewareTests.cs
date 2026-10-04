@@ -75,20 +75,21 @@ public sealed class RateLimitMiddlewareTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Invoke_RotatingForwardedForHeaders_NeverReachesLimit_CurrentBehavior()
+    public async Task Invoke_RotatingForwardedForHeaders_AreIgnoredAndLimitStillApplies()
     {
-        // KNOWN BUG S-1: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // The limiter keys on the client-controlled X-Forwarded-For header (no proxy exists in
-        // front of Kestrel), so rotating values gives every request a fresh bucket and the
-        // 100-requests-per-minute limit never triggers. Once fixed (keying on RemoteIpAddress
-        // only), the 101st request must return 429 TooManyRequests.
+        // FIXED (Phase 2 Batch 4, audit S-1): the limiter keys on the connection's remote address
+        // only - the client-controlled X-Forwarded-For header is ignored, so rotating values no
+        // longer buys fresh buckets and the 101st request hits the limit.
+        HttpStatusCode lastStatus = HttpStatusCode.OK;
         for (int requestIndex = 0; requestIndex <= ApplicationConstants.RateLimit.DefaultMaxRequests; requestIndex++)
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, PingPath);
             request.Headers.Add("X-Forwarded-For", "203.0.113." + requestIndex.ToString(CultureInfo.InvariantCulture));
 
             using HttpResponseMessage response = await _client.SendAsync(request);
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            lastStatus = response.StatusCode;
         }
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, lastStatus);
     }
 }

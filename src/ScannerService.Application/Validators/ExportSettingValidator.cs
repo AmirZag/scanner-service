@@ -17,7 +17,10 @@ public class ExportSettingValidator : AbstractValidator<ExportSettingDto>
         RuleFor(x => x.FileName)
             .Must(fileName => !string.IsNullOrWhiteSpace(fileName))
             .WithMessage("FileName is required")
-            .Must(fileName => fileName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0)
+            // Null-tolerant: the required-rule above already reports a null FileName, and with
+            // FluentValidation's default Continue cascade this predicate still runs on null -
+            // an unguarded dereference surfaced as an opaque 500 (audit C-1a).
+            .Must(fileName => fileName == null || fileName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0)
             .WithMessage("FileName contains invalid characters");
 
         RuleFor(x => x.ExportPath)
@@ -46,5 +49,6 @@ public class ExportSettingValidator : AbstractValidator<ExportSettingDto>
             .WithMessage("ExportPath must be a valid absolute path or empty");
     }
 
-    private static readonly HashSet<string> AllowedFormats = new(StringComparer.OrdinalIgnoreCase) { "PDF", "JPEG", "PNG", "TIFF", "MultiPageTIFF" };
+    // Internal so the scan-request validator enforces the exact same whitelist (audit C-1d).
+    internal static readonly HashSet<string> AllowedFormats = new(StringComparer.OrdinalIgnoreCase) { "PDF", "JPEG", "PNG", "TIFF", "MultiPageTIFF" };
 }

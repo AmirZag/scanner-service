@@ -69,20 +69,18 @@ public class ExportSettingValidatorTests
         Assert.True(validator.Validate(new ExportSettingDto("PDF", @"C:relative\sub", "scan")).IsValid);
     }
 
-    // KNOWN BUG C-1a: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-    // STJ does not enforce the non-nullable FileName annotation, so PUT /api/export-settings with
-    // "fileName": null reaches the second Must predicate, dereferences null and surfaces as a 500
-    // instead of the intended "FileName is required" validation failure.
+    // FIXED (Phase 2 Batch 4, audit C-1a): the second Must predicate is null-tolerant, so a null
+    // fileName surfaces as the intended "FileName is required" validation failure instead of a
+    // NullReferenceException (FluentValidation's Continue cascade runs it even after the
+    // required-rule failed).
     [Fact]
-    public void Validate_NullFileName_CurrentBehavior_ThrowsNullReferenceException()
+    public void Validate_NullFileName_IsRejectedWithRequiredMessage()
     {
         ExportSettingValidator validator = new ExportSettingValidator();
 
-        ExportSettingDto dto = new ExportSettingDto("PDF", @"C:\Scans", null!);
+        ValidationResult result = validator.Validate(new ExportSettingDto("PDF", @"C:\Scans", null!));
 
-        Assert.Throws<NullReferenceException>(() =>
-        {
-            validator.Validate(dto);
-        });
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, failure => failure.ErrorMessage == "FileName is required");
     }
 }

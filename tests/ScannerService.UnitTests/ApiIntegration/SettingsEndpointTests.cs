@@ -315,15 +315,17 @@ public sealed class SettingsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PutSettings_NullEsclManualDevices_ThrowsNullReference_CurrentBehavior()
+    public async Task PutSettings_NullEsclManualDevices_Returns400()
     {
-        // KNOWN BUG C-1b: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // ScannerSettingsValidator chains .Must(...) after .NotNull(...) under the default
-        // Continue cascade, so a null esclManualDevices still reaches devices.Count and throws
-        // NullReferenceException inside the validator (surfacing as a server exception instead of
-        // a 400). Once fixed, the PUT must return a 400 validation problem instead of throwing.
-        await Assert.ThrowsAsync<NullReferenceException>(
-            () => TestApiHost.PutJsonAsync(_client, "/api/settings", NullDevicesSettingsJson));
+        // FIXED (Phase 2 Batch 4, audit C-1b): the validator's list predicates are null-tolerant,
+        // so a null esclManualDevices surfaces as a 400 validation problem instead of a server
+        // exception.
+        using HttpResponseMessage response = await TestApiHost.PutJsonAsync(_client, "/api/settings", NullDevicesSettingsJson);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Dictionary<string, string[]> problems = await TestApiHost.ReadValidationProblemsAsync(response);
+        Assert.True(problems.TryGetValue("EsclManualDevices", out string[]? messages));
+        Assert.NotNull(messages);
     }
 
     [Fact]

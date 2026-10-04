@@ -135,12 +135,10 @@ public class ProfilesEndToEndTests : IDisposable
     }
 
     [Fact]
-    public async Task PostProfile_WithDuplicateName_CurrentBehavior_ReturnsRawServerError()
+    public async Task PostProfile_WithDuplicateName_Returns409Conflict()
     {
-        // KNOWN BUG F-24: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // The unique index on Profile.Name rejects the second insert and the DbUpdateException
-        // escapes the endpoint unhandled, so clients get an opaque 500. After the fix (friendly
-        // pre-check or DbUpdateException mapping), assert HttpStatusCode.BadRequest or Conflict.
+        // FIXED (Phase 2 Batch 4, audit F-24): the endpoint translates the unique-index
+        // DbUpdateException into a 409 Conflict instead of an opaque 500.
         ScannerServiceConfiguration configuration = EndToEndHostFactory.CreateTestConfiguration(EndToEndHostFactory.FindFreeLoopbackPort());
         WebApiHostService host = await EndToEndHostFactory.StartHostAsync(configuration);
         try
@@ -152,7 +150,7 @@ public class ProfilesEndToEndTests : IDisposable
             using HttpResponseMessage secondResponse = await client.PostAsync("api/profiles", EndToEndHostFactory.CreateJsonContent(createRequest));
 
             Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
-            Assert.Equal(HttpStatusCode.InternalServerError, secondResponse.StatusCode);
+            Assert.Equal(HttpStatusCode.Conflict, secondResponse.StatusCode);
         }
         finally
         {

@@ -137,17 +137,18 @@ public class UpsertProfileValidatorTests
         Assert.Equal(expectedValid, result.IsValid);
     }
 
-    // KNOWN BUG C-1c: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-    // UpsertProfileValidator has no DeviceId rule, so an empty device id is accepted and produces
-    // a profile that can never scan (UpdateProfileValidator enforces the rule; this one does not).
+    // FIXED (Phase 2 Batch 4, audit C-1c): UpsertProfileValidator now mirrors
+    // UpdateProfileValidator's DeviceId rule - an empty device id is rejected instead of
+    // producing a profile that can never scan.
     [Fact]
-    public void Validate_EmptyDeviceId_CurrentBehavior_IsAccepted()
+    public void Validate_EmptyDeviceId_IsRejected()
     {
         UpsertProfileValidator validator = new UpsertProfileValidator();
 
         ValidationResult result = validator.Validate(NewValidUpsert("Broken Device", string.Empty));
 
-        Assert.True(result.IsValid);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, failure => failure.ErrorMessage == "DeviceId cannot be empty or whitespace");
     }
 
     private static UpsertProfileDto NewValidUpsert(string name = "Invoices", string? deviceId = null)
