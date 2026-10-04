@@ -62,7 +62,28 @@ jobs:
         # must reach dotnet intact or VSTest fails with "Could not find data collector".
         # No --results-directory: tests/Check-Coverage.ps1 scans the default
         # tests/ScannerService.UnitTests/TestResults location.
-        run: 'dotnet test tests/ScannerService.UnitTests/ScannerService.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage" --settings tests/coverage.runsettings --logger trx'
+        # On failure, each failed test is emitted as a ::error:: check annotation so the
+        # failure detail is readable from the public checks API without downloading logs.
+        shell: pwsh
+        run: |
+          dotnet test tests/ScannerService.UnitTests/ScannerService.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage" --settings tests/coverage.runsettings --logger trx
+          $exit = $LASTEXITCODE
+          if ($exit -ne 0) {
+            $trx = Get-ChildItem 'tests/ScannerService.UnitTests/TestResults' -Filter '*.trx' -Recurse |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($trx) {
+              [xml] $doc = Get-Content -Raw $trx.FullName
+              $failed = @($doc.TestRun.Results.UnitTestResult | Where-Object { $_.outcome -eq 'Failed' })
+              Write-Host "Failed tests: $($failed.Count)"
+              foreach ($result in ($failed | Select-Object -First 10)) {
+                $message = [string] $result.Message
+                $message = (($message -replace '\r?\n', ' ') -replace ':', ' -')
+                if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+                Write-Host "::error::$($result.testName) - $message"
+              }
+            }
+          }
+          exit $exit
 
       - name: Coverage gate
         # Fails when any coverable line is uncovered and not on the script's documented
