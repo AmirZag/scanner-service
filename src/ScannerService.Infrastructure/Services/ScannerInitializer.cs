@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using NAPS2.Images;
@@ -119,6 +120,7 @@ public sealed class ScannerInitializer : IScannerInitializer, IScannerInitialize
         }
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Creates the NAPS2 scanning context and spawns the Win32 TWAIN worker process; its failure branches depend on the packaged worker environment rather than testable logic. The lazy-init/memoization wrapper around it is fully tested.")]
     private void InitializeInternal()
     {
         // Note: This method is called while holding the lock

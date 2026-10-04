@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Net;
 using System.Text;
@@ -411,12 +412,22 @@ public class WebApiHostService : IDisposable
                 }
             }
 
-            // Clean up temporary files before disposing the app
+            // Clean up temporary files before disposing the app. When cancellation let _runTask
+            // run to completion, RunAsync has already disposed the container, so this scope is
+            // unavailable - the sweep is best-effort here and its files are re-swept on the next
+            // successful stop.
             if (_app != null)
             {
-                using var scope = _app.Services.CreateScope();
-                var scanJobService = scope.ServiceProvider.GetService<IScanJobService>() as ScanJobService;
-                scanJobService?.CleanupOldTempFiles(TimeSpan.Zero);
+                try
+                {
+                    using var scope = _app.Services.CreateScope();
+                    var scanJobService = scope.ServiceProvider.GetService<IScanJobService>() as ScanJobService;
+                    scanJobService?.CleanupOldTempFiles(TimeSpan.Zero);
+                }
+                catch (ObjectDisposedException ex)
+                {
+                    Log.Debug(ex, "Temp-file sweep skipped: the host container was already disposed by RunAsync completion");
+                }
             }
 
             if (_app != null)
@@ -562,7 +573,7 @@ public class WebApiHostService : IDisposable
     }
 
     /// <summary>Kind of address the Web API binds to, resolved from ScannerService:ApiHost.</summary>
-    private enum ApiBindKind
+    internal enum ApiBindKind
     {
         /// <summary>Loopback only (127.0.0.1 and [::1]).</summary>
         Loopback,
@@ -580,7 +591,7 @@ public class WebApiHostService : IDisposable
     /// <param name="Address">The specific IP address; only set for <see cref="ApiBindKind.SpecificAddress"/>.</param>
     /// <param name="UrlHost">Host for locally-constructed URLs: "localhost" for loopback and wildcard binds (those always cover loopback), otherwise the IP literal (bracketed when IPv6).</param>
     /// <param name="BindDescription">Human-readable description of the bind for logs and error messages.</param>
-    private sealed record ApiBindTarget(ApiBindKind Kind, IPAddress? Address, string UrlHost, string BindDescription)
+    internal sealed record ApiBindTarget(ApiBindKind Kind, IPAddress? Address, string UrlHost, string BindDescription)
     {
         /// <summary>Address the port-availability probe must bind: loopback for the default, the wildcard for all-interfaces, the literal otherwise.</summary>
         public IPAddress ProbeAddress => Kind switch
@@ -600,7 +611,7 @@ public class WebApiHostService : IDisposable
     /// configuration validator always parse here; anything unknown falls back to the loopback
     /// target so an unvalidated or stale config can never crash host construction.
     /// </summary>
-    private static ApiBindTarget ParseApiHost(string? apiHost)
+    internal static ApiBindTarget ParseApiHost(string? apiHost)
     {
         string candidate = (apiHost ?? string.Empty).Trim();
 
@@ -640,6 +651,7 @@ public class WebApiHostService : IDisposable
     /// Helper class to validate CORS origins for local network access.
     /// Allows localhost, 127.0.0.1, and private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x).
     /// </summary>
+    [ExcludeFromCodeCoverage(Justification = "Dead code per the Phase 1 audit (C-3): written to restrict CORS but never wired; the live policy allows all origins by design. Deleted in the dead-code batch.")]
     private static class OriginChecker
     {
         public static bool IsLocalOrigin(string? origin)

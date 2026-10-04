@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -410,6 +411,7 @@ public static class EndpointConfigurationExtensions
         });
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Dead code per the Phase 1 audit (C-3): private duplicate of LocalSettingsStore.CreateEmptyOverrides with zero references. Deleted in the dead-code batch.")]
     private static ScannerSettingsOverridesDto CreateEmptyOverrides()
     {
         return new ScannerSettingsOverridesDto(

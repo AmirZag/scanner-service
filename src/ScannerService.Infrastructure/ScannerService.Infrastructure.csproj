@@ -18,4 +18,9 @@
 		<ProjectReference Include="..\ScannerService.Domain\ScannerService.Domain.csproj" />
 	</ItemGroup>
 
+	<ItemGroup>
+		<!-- Unit tests exercise the internal pure-logic seams (option parsers, save pipeline). -->
+		<InternalsVisibleTo Include="ScannerService.Tests" />
+	</ItemGroup>
+
 </Project>

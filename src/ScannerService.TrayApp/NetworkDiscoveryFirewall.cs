@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using Serilog;
 
@@ -20,6 +21,7 @@ internal static class NetworkDiscoveryFirewall
     private const string ExeName = "ScannerService.TrayApp.exe";
     private const int ErrorCanceled = 1223;
 
+    [ExcludeFromCodeCoverage(Justification = "May launch an elevated netsh process (UAC consent dialog); cannot execute in automated tests. The non-elevated netsh paths (RuleExists/DeleteRule/AddRule/StartNetsh) are tested directly.")]
     public static void EnsureRule(bool isAdmin)
     {
         var exePath = Path.Combine(AppContext.BaseDirectory, ExeName);
@@ -106,6 +108,7 @@ internal static class NetworkDiscoveryFirewall
     /// unelevated, so without this the rule would never be created; a decline (Win32Exception with
     /// ERROR_CANCELED) propagates to the caller and falls back to the logged manual command.
     /// </summary>
+    [ExcludeFromCodeCoverage(Justification = "Shells out with Verb=runas, triggering a UAC consent dialog; untestable in automation.")]
     private static void AddRuleElevated(string exePath)
     {
         using var process = StartNetsh(BuildAddRuleArguments(exePath), elevate: true);

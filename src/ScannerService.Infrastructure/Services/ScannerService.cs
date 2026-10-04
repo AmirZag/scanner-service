@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
@@ -116,6 +117,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             .ToList();
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Drives real scanner hardware through NAPS2's ScanController (TWAIN worker, WIA COM, eSCL devices); line coverage requires physical devices. Covered by E2E shape assertions and manual hardware smoke tests instead.")]
     public async Task<Result<List<string>>> ExecuteScanAsync(ScanJobConfiguration scanJobConfiguration, CancellationToken cancellationToken = default)
     {
         var scanStartTime = DateTime.UtcNow;
@@ -138,6 +140,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         }
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Scan pipeline: gates real device I/O, the NAPS2 Scan call and the no-progress watchdog; hardware-bound, see ExecuteScanAsync.")]
     private async Task<Result<List<string>>> ExecuteScanCoreAsync(ScanJobConfiguration scanJobConfiguration, DateTime scanStartTime, CancellationToken cancellationToken)
     {
         await _initializer.InitializeAsync(cancellationToken);
@@ -277,6 +280,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
     /// If it succeeded in that window (deadline hit exactly as the last page arrived) the still-live images
     /// are disposed here; a faulted consumer is observed to avoid an unobserved task exception.
     /// </summary>
+    [ExcludeFromCodeCoverage(Justification = "Bounded observation of an abandoned scan consumer still inside native driver I/O; reachable only with a real device mid-scan.")]
     private async Task ObserveAbortedConsumerAsync(Task<bool> consumeTask, List<ProcessedImage> images)
     {
         try
@@ -306,6 +310,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
     /// results collected so far are returned and the driver enters a cool-down instead of being retried
     /// immediately on the next request.
     /// </summary>
+    [ExcludeFromCodeCoverage(Justification = "Enumerates real devices via NAPS2 drivers (TWAIN worker, WIA COM, mDNS/eSCL); hardware/network-bound. E2E asserts the shape of the result.")]
     private async Task<List<ScanDevice>> QueryDriverDevicesAsync(Driver driver, ScanController controller, CancellationToken cancellationToken)
     {
         if (ScannerDriverFactory.ShouldSkipDriver(driver, _initializer.TwainWorkerFailed))
@@ -425,7 +430,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         await Task.CompletedTask;
     }
 
-    private async Task<List<string>> SaveAsync(List<ProcessedImage> images, ScanJobConfiguration config, ScanningContext context)
+    internal async Task<List<string>> SaveAsync(List<ProcessedImage> images, ScanJobConfiguration config, ScanningContext context)
     {
         var files = new List<string>();
         var name = config.FileName.Replace("{datetime}", DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture));
@@ -461,7 +466,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         return files;
     }
 
-    private static BitDepth ParseBitDepth(string bitDepth)
+    internal static BitDepth ParseBitDepth(string bitDepth)
     {
         return bitDepth switch
         {
@@ -471,14 +476,14 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         };
     }
 
-    private static NAPS2.Scan.PaperSource ParsePaperSource(string paperSource)
+    internal static NAPS2.Scan.PaperSource ParsePaperSource(string paperSource)
     {
         return paperSource.Equals(ScannerConstants.PaperSource.Feeder, StringComparison.OrdinalIgnoreCase)
             ? NAPS2.Scan.PaperSource.Feeder
             : NAPS2.Scan.PaperSource.Flatbed;
     }
 
-    private static ImageFileFormat ParseImageFileFormat(string format)
+    internal static ImageFileFormat ParseImageFileFormat(string format)
     {
         return format.ToLowerInvariant() switch
         {
@@ -532,6 +537,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         return new Bitmap(tempPath);
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Resolves a scan target from a live device enumeration; requires real hardware, see QueryDriverDevicesAsync.")]
     private async Task<ScanDevice?> FindDeviceAsync(string deviceId, ScanController controller, CancellationToken cancellationToken)
     {
         // Network discovery cannot always see the device (firewalled UDP 5353, VLAN segmentation, WiFi
