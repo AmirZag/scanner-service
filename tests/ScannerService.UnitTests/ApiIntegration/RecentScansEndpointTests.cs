@@ -112,7 +112,7 @@ public sealed class RecentScansEndpointTests : IAsyncLifetime
         Assert.True(newest.Files[0].SizeBytes > 0);
 
         ScanGroupDto grouped = payload.Groups[1];
-        Assert.Equal("report", grouped.ScanId);
+        Assert.Equal("report_20261003_101010", grouped.ScanId);
         Assert.Equal("jpg", grouped.Format);
         Assert.Equal(2, grouped.FileCount);
         Assert.All(grouped.Files, file => Assert.Equal("image/jpeg", file.ContentType));
@@ -134,13 +134,14 @@ public sealed class RecentScansEndpointTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Seeds three files that group into exactly two scans: a two-page jpg pair (report_1/report_2
-    /// -> group "report") and a single newer pdf (manual.pdf -> group "manual").
+    /// Seeds three files that group into exactly two scans: a two-page jpg pair sharing the
+    /// scanner's base_yyyyMMdd_HHmmss token (group "report_20261003_101010") and a single newer
+    /// pdf (manual.pdf -> group "manual").
     /// </summary>
     private async Task SeedTwoScanGroupsAsync()
     {
-        string reportPage1 = Path.Combine(_exportDirectory, "report_1.jpg");
-        string reportPage2 = Path.Combine(_exportDirectory, "report_2.jpg");
+        string reportPage1 = Path.Combine(_exportDirectory, "report_20261003_101010_1.jpg");
+        string reportPage2 = Path.Combine(_exportDirectory, "report_20261003_101010_2.jpg");
         string manual = Path.Combine(_exportDirectory, "manual.pdf");
         await File.WriteAllTextAsync(reportPage1, "page-one");
         await File.WriteAllTextAsync(reportPage2, "page-two");

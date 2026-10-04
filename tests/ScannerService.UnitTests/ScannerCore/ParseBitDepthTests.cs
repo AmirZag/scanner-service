@@ -25,27 +25,19 @@ public sealed class ParseBitDepthTests
         Assert.Equal(expectedBitDepth, parsed);
     }
 
-    // KNOWN BUG A-3: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-    // The profile validators accept BitDepth case-insensitively and store the raw string, but this
-    // parser is a case-sensitive constant-pattern switch: "grayscale" falls through to the default
-    // arm and silently scans as Color. After the fix it must map to BitDepth.Grayscale.
-    [Fact]
-    public void ParseBitDepth_LowercaseGrayscale_CurrentBehavior_ReturnsColor()
+    // FIXED (Phase 2 Batch 1, audit A-3): the parser compares with StringComparison.OrdinalIgnoreCase,
+    // matching the validators, so non-canonical casing maps to the requested bit depth instead of
+    // silently scanning as Color.
+    [Theory]
+    [InlineData("grayscale", BitDepth.Grayscale)]
+    [InlineData("GRAYSCALE", BitDepth.Grayscale)]
+    [InlineData("blackandwhite", BitDepth.BlackAndWhite)]
+    [InlineData("BlackAndWhite", BitDepth.BlackAndWhite)]
+    public void ParseBitDepth_NonCanonicalCasing_MapsToRequestedBitDepth(string bitDepth, BitDepth expectedBitDepth)
     {
-        BitDepth parsed = ScannerServiceType.ParseBitDepth("grayscale");
+        BitDepth parsed = ScannerServiceType.ParseBitDepth(bitDepth);
 
-        Assert.Equal(BitDepth.Color, parsed);
-    }
-
-    // KNOWN BUG A-3: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-    // Same case-sensitivity defect as the lowercase grayscale pin: "blackandwhite" also falls
-    // through to Color. After the fix it must map to BitDepth.BlackAndWhite.
-    [Fact]
-    public void ParseBitDepth_LowercaseBlackAndWhite_CurrentBehavior_ReturnsColor()
-    {
-        BitDepth parsed = ScannerServiceType.ParseBitDepth("blackandwhite");
-
-        Assert.Equal(BitDepth.Color, parsed);
+        Assert.Equal(expectedBitDepth, parsed);
     }
 
     [Fact]

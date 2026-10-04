@@ -249,24 +249,28 @@ public partial class RecentScansService : IRecentScansService
     /// </summary>
     private List<ScanGroupDto> GroupFilesByScanId(List<ScanFileRecord> files)
     {
+        // The dictionary key carries the extension so a PDF and a PNG set sharing one scan's
+        // datetime token stay separate groups; the displayed ScanId remains the bare scan id.
         var groups = new Dictionary<string, List<ScanFileRecord>>();
 
         foreach (var file in files)
         {
             var scanId = ExtractScanId(file.Filename);
+            var groupKey = scanId + "|" + file.Extension.ToLowerInvariant();
 
-            if (!groups.TryGetValue(scanId, out var fileList))
+            if (!groups.TryGetValue(groupKey, out var fileList))
             {
                 fileList = new List<ScanFileRecord>();
-                groups[scanId] = fileList;
+                groups[groupKey] = fileList;
             }
             fileList.Add(file);
         }
 
         var result = new List<ScanGroupDto>();
 
-        foreach (var (scanId, groupFiles) in groups)
+        foreach (var (_, groupFiles) in groups)
         {
+            var scanId = ExtractScanId(groupFiles[0].Filename);
             var format = groupFiles[0].Extension.TrimStart('.').ToLowerInvariant();
             var timestamp = groupFiles.Min(f => f.CreatedAtUtc);
 
@@ -294,15 +298,19 @@ public partial class RecentScansService : IRecentScansService
     }
 
     /// <summary>
-    /// Extracts scan ID from filename by removing the page numbering suffix and extension.
+    /// Extracts scan ID from filename by removing the page numbering suffix and extension. A
+    /// suffix is only treated as a page index when the remainder still ends with the embedded
+    /// datetime token the scanner writes (yyyyMMdd_HHmmss); anything else is kept verbatim so a
+    /// literal year suffix ("report_2026") or the HHmmss token of a suffix-less PDF/TIFF can
+    /// never be mistaken for a page index.
     /// </summary>
     private static string ExtractScanId(string filename)
     {
         var nameWithoutExt = Path.GetFileNameWithoutExtension(filename);
-        var match = UnderscoreNumberSuffixRegex().Match(nameWithoutExt);
+        var match = ScanFileRegex().Match(nameWithoutExt);
         if (match.Success)
         {
-            return match.Groups[1].Value;
+            return match.Groups["base"].Value;
         }
         return nameWithoutExt;
     }
@@ -316,10 +324,11 @@ public partial class RecentScansService : IRecentScansService
     }
 
     /// <summary>
-    /// Matches pattern: name_{number} at the end of the string
+    /// Matches the scanner's output names: "base_yyyyMMdd_HHmmss" for single-file formats
+    /// (PDF/multi-page TIFF) and "base_yyyyMMdd_HHmmss_page" for per-page images.
     /// </summary>
-    [GeneratedRegex(@"^(.+?)_\d+$", RegexOptions.Compiled)]
-    private static partial Regex UnderscoreNumberSuffixRegex();
+    [GeneratedRegex(@"^(?<base>.+_\d{8}_\d{6})(?:_(?<page>\d{1,4}))?$", RegexOptions.Compiled)]
+    private static partial Regex ScanFileRegex();
 
     /// <summary>
     /// Internal record for file tracking

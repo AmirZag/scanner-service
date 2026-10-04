@@ -750,17 +750,17 @@ public class TrayApp : ApplicationContext
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question);
 
-        if (result == DialogResult.Yes)
+        // Elevate FIRST and dispose only on success: a declined UAC prompt (Win32Exception
+        // 1223) is a routine path, and disposing before knowing the outcome left a disposed,
+        // invisible process with no tray icon and no way back. The new instance tolerates the
+        // brief port overlap via its own port-fallback search.
+        if (result == DialogResult.Yes && Program.RestartAsAdministrator())
         {
             // Dispose performs the (bounded) stop; calling StopService here as well would race it.
             Dispose();
 
-            if (Program.RestartAsAdministrator())
-            {
-                // Successfully restarted as admin, exit current instance
-                System.Windows.Forms.Application.Exit();
-            }
-            // If restart failed, the user is still in the app
+            // Successfully restarted as admin, exit current instance
+            System.Windows.Forms.Application.Exit();
         }
     }
 }

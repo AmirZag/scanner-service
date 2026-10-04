@@ -48,34 +48,37 @@ public sealed class RecentScansServiceTests : IAsyncLifetime
     [Fact]
     public async Task GetRecentScans_NumberedImagePages_GroupIntoSingleMultiPageGroup()
     {
+        // Per-page images follow the scanner's "base_yyyyMMdd_HHmmss_page" naming, so the page
+        // suffix strips and the set groups under the shared datetime token.
         DateTime firstPageTime = new(2026, 10, 3, 10, 0, 0, DateTimeKind.Utc);
-        ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "pages_1.jpg", firstPageTime);
-        ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "pages_2.jpg", firstPageTime.AddMinutes(1));
-        ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "pages_3.jpg", firstPageTime.AddMinutes(2));
+        ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "pages_20261003_100000_1.jpg", firstPageTime);
+        ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "pages_20261003_100000_2.jpg", firstPageTime.AddMinutes(1));
+        ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "pages_20261003_100000_3.jpg", firstPageTime.AddMinutes(2));
         await _harness.SetExportPathAsync(_harness.ExportDirectory);
 
         RecentScansResponseDto response = await _harness.CreateRecentScansService().GetRecentScansAsync(10);
 
         Assert.Equal(1, response.TotalGroups);
         ScanGroupDto group = Assert.Single(response.Groups);
-        Assert.Equal("pages", group.ScanId);
+        Assert.Equal("pages_20261003_100000", group.ScanId);
         Assert.Equal("jpg", group.Format);
         Assert.Equal(3, group.FileCount);
         Assert.Equal(firstPageTime, group.Timestamp);
-        Assert.Equal(new[] { "pages_1.jpg", "pages_2.jpg", "pages_3.jpg" }, group.Files.Select(file => file.Filename).ToArray());
+        Assert.Equal(
+            new[] { "pages_20261003_100000_1.jpg", "pages_20261003_100000_2.jpg", "pages_20261003_100000_3.jpg" },
+            group.Files.Select(file => file.Filename).ToArray());
         Assert.Equal(firstPageTime, group.Files[0].CreatedAt);
         Assert.Equal(firstPageTime.AddMinutes(1), group.Files[1].CreatedAt);
         Assert.Equal(firstPageTime.AddMinutes(2), group.Files[2].CreatedAt);
         Assert.All(group.Files, file => Assert.Equal("image/jpeg", file.ContentType));
     }
 
+    // FIXED (Phase 2 Batch 1, audit A-2): ExtractScanId only strips a page suffix when the
+    // remainder still ends with the embedded datetime token, so same-day scans keep their full
+    // timestamp token and never collapse into one phantom group.
     [Fact]
-    public async Task GetRecentScans_TwoSameDayPdfs_MergeIntoOnePhantomGroup_CurrentBehavior()
+    public async Task GetRecentScans_TwoSameDayPdfs_GroupSeparatelyByFullTimestamp()
     {
-        // KNOWN BUG A-2: pins current (buggy) behavior; flip this assertion when the bug is fixed.
-        // ExtractScanId's regex strips one trailing _digits suffix, so the HHmmss token of the
-        // second same-day PDF is consumed as a phantom page index and both scans collapse into
-        // one group. The fix should keep the datetime token, yielding two separate groups.
         DateTime firstScanTime = new(2026, 10, 3, 10, 10, 10, DateTimeKind.Utc);
         DateTime secondScanTime = new(2026, 10, 3, 11, 11, 11, DateTimeKind.Utc);
         ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "scan_20261003_101010.pdf", firstScanTime);
@@ -84,20 +87,42 @@ public sealed class RecentScansServiceTests : IAsyncLifetime
 
         RecentScansResponseDto response = await _harness.CreateRecentScansService().GetRecentScansAsync(10);
 
-        Assert.Equal(1, response.TotalGroups);
-        ScanGroupDto mergedGroup = Assert.Single(response.Groups);
-        Assert.Equal("scan_20261003", mergedGroup.ScanId);
-        Assert.Equal(2, mergedGroup.FileCount);
-        Assert.Equal(firstScanTime, mergedGroup.Timestamp);
+        Assert.Equal(2, response.TotalGroups);
+        ScanGroupDto firstGroup = Assert.Single(response.Groups, group => group.ScanId == "scan_20261003_101010");
+        Assert.Equal(1, firstGroup.FileCount);
+        Assert.Equal(firstScanTime, firstGroup.Timestamp);
+        ScanGroupDto secondGroup = Assert.Single(response.Groups, group => group.ScanId == "scan_20261003_111111");
+        Assert.Equal(1, secondGroup.FileCount);
+        Assert.Equal(secondScanTime, secondGroup.Timestamp);
     }
 
     [Fact]
-    public async Task GetRecentScans_SameStemDifferentExtensions_MergeIntoOneGroup_CurrentBehavior()
+    public async Task GetRecentScans_SameBaseWithDifferentExtensions_FormSeparateGroups()
     {
-        // KNOWN BUG A-2 (second facet): pins current (buggy) behavior; flip this assertion when
-        // the bug is fixed. The grouping key ignores extensions, so the literal year suffix of
-        // "report_2026" is stripped as a page index and both distinct documents merge into one
-        // group. The fix should keep them separate.
+        // Grouping keys carry the extension, so a PDF and a per-page PNG set sharing one scan's
+        // datetime token never merge into a single group with a mixed file list.
+        DateTime scanTime = new(2026, 10, 3, 10, 10, 10, DateTimeKind.Utc);
+        ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "scan_20261003_101010.pdf", scanTime);
+        ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "scan_20261003_101010_1.png", scanTime);
+        ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "scan_20261003_101010_2.png", scanTime);
+        await _harness.SetExportPathAsync(_harness.ExportDirectory);
+
+        RecentScansResponseDto response = await _harness.CreateRecentScansService().GetRecentScansAsync(10);
+
+        Assert.Equal(2, response.TotalGroups);
+        ScanGroupDto pdfGroup = Assert.Single(response.Groups, group => group.Format == "pdf");
+        Assert.Equal("scan_20261003_101010", pdfGroup.ScanId);
+        Assert.Equal(1, pdfGroup.FileCount);
+        ScanGroupDto pngGroup = Assert.Single(response.Groups, group => group.Format == "png");
+        Assert.Equal(2, pngGroup.FileCount);
+    }
+
+    [Fact]
+    public async Task GetRecentScans_UserNamedFilesWithoutDatetimeToken_StaySeparateGroups()
+    {
+        // FIXED (Phase 2 Batch 1, audit A-2 second facet): names without the scanner's datetime
+        // token are never treated as page-index candidates, so "report" and "report_2026" stay
+        // two distinct documents instead of merging.
         DateTime firstReportTime = new(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
         DateTime secondReportTime = new(2026, 10, 2, 13, 0, 0, DateTimeKind.Utc);
         ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "report.pdf", firstReportTime);
@@ -106,11 +131,12 @@ public sealed class RecentScansServiceTests : IAsyncLifetime
 
         RecentScansResponseDto response = await _harness.CreateRecentScansService().GetRecentScansAsync(10);
 
-        Assert.Equal(1, response.TotalGroups);
-        ScanGroupDto mergedGroup = Assert.Single(response.Groups);
-        Assert.Equal("report", mergedGroup.ScanId);
-        Assert.Equal(2, mergedGroup.FileCount);
-        Assert.Equal("pdf", mergedGroup.Format);
+        Assert.Equal(2, response.TotalGroups);
+        ScanGroupDto plainGroup = Assert.Single(response.Groups, group => group.ScanId == "report");
+        Assert.Equal(1, plainGroup.FileCount);
+        Assert.Equal("pdf", plainGroup.Format);
+        ScanGroupDto yearSuffixGroup = Assert.Single(response.Groups, group => group.ScanId == "report_2026");
+        Assert.Equal(1, yearSuffixGroup.FileCount);
     }
 
     [Fact]
@@ -204,11 +230,12 @@ public sealed class RecentScansServiceTests : IAsyncLifetime
     public async Task GetRecentScans_FilesAboveMaxFiles_CapsAtThousandFiles()
     {
         // MaxFiles = 1000: enumeration stops after 1000 supported files even though 1001 exist.
-        // All files share one stem, so the cap shows up as a single 1000-page group.
+        // All files are pages of one scanner-shaped scan, so the cap shows up as a single
+        // 1000-page group.
         DateTime bulkTime = new(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
         for (int index = 1; index <= 1001; index++)
         {
-            ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "bulk_" + index.ToString(CultureInfo.InvariantCulture) + ".jpg", bulkTime);
+            ScanJobsTestHarness.WriteScanFile(_harness.ExportDirectory, "bulk_20260901_120000_" + index.ToString(CultureInfo.InvariantCulture) + ".jpg", bulkTime);
         }
 
         await _harness.SetExportPathAsync(_harness.ExportDirectory);
@@ -218,7 +245,7 @@ public sealed class RecentScansServiceTests : IAsyncLifetime
         Assert.Equal(1, response.TotalGroups);
         Assert.Equal(10, response.RequestedCount);
         ScanGroupDto group = Assert.Single(response.Groups);
-        Assert.Equal("bulk", group.ScanId);
+        Assert.Equal("bulk_20260901_120000", group.ScanId);
         Assert.Equal(1000, group.FileCount);
         Assert.Equal(bulkTime, group.Timestamp);
     }
@@ -345,24 +372,24 @@ public sealed class RecentScansServiceTests : IAsyncLifetime
         {
             ScanJobsTestHarness.WriteScanFile(
                 _harness.ExportDirectory,
-                "bulk_" + index.ToString(CultureInfo.InvariantCulture) + ".jpg",
+                "bulk_20261003_070000_" + index.ToString(CultureInfo.InvariantCulture) + ".jpg",
                 bulkTime);
         }
 
         string firstSubdirectory = Path.Combine(_harness.ExportDirectory, "sub1");
-        ScanJobsTestHarness.WriteScanFile(firstSubdirectory, "sub_1.jpg", bulkTime);
-        ScanJobsTestHarness.WriteScanFile(firstSubdirectory, "sub_2.jpg", bulkTime);
+        ScanJobsTestHarness.WriteScanFile(firstSubdirectory, "sub_20261003_070001_1.jpg", bulkTime);
+        ScanJobsTestHarness.WriteScanFile(firstSubdirectory, "sub_20261003_070001_2.jpg", bulkTime);
         string secondSubdirectory = Path.Combine(_harness.ExportDirectory, "sub2");
-        ScanJobsTestHarness.WriteScanFile(secondSubdirectory, "other_1.jpg", bulkTime);
+        ScanJobsTestHarness.WriteScanFile(secondSubdirectory, "other_20261003_070002_1.jpg", bulkTime);
         await _harness.SetExportPathAsync(_harness.ExportDirectory);
 
         RecentScansResponseDto response = await _harness.CreateRecentScansService().GetRecentScansAsync(10);
 
         Assert.Equal(2, response.TotalGroups);
-        Assert.DoesNotContain(response.Groups, group => group.ScanId == "other");
-        ScanGroupDto bulkGroup = response.Groups.Single(group => group.ScanId == "bulk");
+        Assert.DoesNotContain(response.Groups, group => group.ScanId == "other_20261003_070002");
+        ScanGroupDto bulkGroup = response.Groups.Single(group => group.ScanId == "bulk_20261003_070000");
         Assert.Equal(ApplicationConstants.RecentScans.MaxFiles - 1, bulkGroup.FileCount);
-        ScanGroupDto truncatedGroup = Assert.Single(response.Groups, group => group.ScanId != "bulk");
+        ScanGroupDto truncatedGroup = Assert.Single(response.Groups, group => group.ScanId != "bulk_20261003_070000");
         Assert.Equal(1, truncatedGroup.FileCount);
     }
 

@@ -29,7 +29,7 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
     /// (after a short queue wait) instead of being started against a busy device.
     /// </summary>
     private readonly SemaphoreSlim _scanGate = new(1, 1);
-    private readonly ConcurrentBag<string> _tempBitmapFiles = new();
+    private readonly ConcurrentDictionary<string, byte> _tempBitmapFiles = new();
 
     public ScannerService(
         IScannerInitializer initializer,
@@ -396,20 +396,9 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         _logger.LogInformation("Disposing scanner provider");
 
         // Clean up temporary bitmap files
-        foreach (var tempFile in _tempBitmapFiles)
+        foreach (var tempFile in _tempBitmapFiles.Keys.ToList())
         {
-            try
-            {
-                if (File.Exists(tempFile))
-                {
-                    File.Delete(tempFile);
-                    _logger.LogDebug("Cleaned up temp bitmap file: {TempFile}", tempFile);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to delete temp bitmap file: {TempFile}", tempFile);
-            }
+            DeleteTempBitmap(tempFile);
         }
         _tempBitmapFiles.Clear();
 
@@ -468,12 +457,20 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
 
     internal static BitDepth ParseBitDepth(string bitDepth)
     {
-        return bitDepth switch
+        // The profile validators accept these values case-insensitively and store the raw string,
+        // so the parser must compare with the same comparer - a case-sensitive constant-pattern
+        // switch silently scanned "grayscale" as Color.
+        if (string.Equals(bitDepth, ScannerConstants.BitDepth.Grayscale, StringComparison.OrdinalIgnoreCase))
         {
-            ScannerConstants.BitDepth.BlackAndWhite => BitDepth.BlackAndWhite,
-            ScannerConstants.BitDepth.Grayscale => BitDepth.Grayscale,
-            _ => BitDepth.Color
-        };
+            return BitDepth.Grayscale;
+        }
+
+        if (string.Equals(bitDepth, ScannerConstants.BitDepth.BlackAndWhite, StringComparison.OrdinalIgnoreCase))
+        {
+            return BitDepth.BlackAndWhite;
+        }
+
+        return BitDepth.Color;
     }
 
     internal static NAPS2.Scan.PaperSource ParsePaperSource(string paperSource)
@@ -498,22 +495,42 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
         await Task.Run(() =>
         {
             var tiffEncoder = GetTiffEncoder();
-            using var firstBitmap = GetBitmapFromImage(images[0]);
             using var encoderParams = new EncoderParameters(1);
             encoderParams.Param[0] = new EncoderParameter(Encoder.SaveFlag, (long)EncoderValue.MultiFrame);
 
-            firstBitmap.Save(outputPath, tiffEncoder, encoderParams);
-            encoderParams.Param[0] = new EncoderParameter(Encoder.SaveFlag, (long)EncoderValue.FrameDimensionPage);
-
-            for (int i = 1; i < images.Count; i++)
+            // The first page's bitmap is the multi-frame document and must stay alive until every
+            // SaveAdd ran, so its temp file is deleted at the end; each follow-up page's temp file
+            // is deleted as soon as its bitmap is disposed. The instance bag is only a backstop
+            // for entries that outlive an exception path - the DisposeAsync sweep clears it.
+            var firstTempPath = CreateTempBitmapPath();
+            try
             {
-                using var bitmap = GetBitmapFromImage(images[i]);
-                firstBitmap.SaveAdd(bitmap, encoderParams);
-            }
+                using var firstBitmap = GetBitmapFromTempFile(images[0], firstTempPath);
+                firstBitmap.Save(outputPath, tiffEncoder, encoderParams);
+                encoderParams.Param[0] = new EncoderParameter(Encoder.SaveFlag, (long)EncoderValue.FrameDimensionPage);
+
+                for (int i = 1; i < images.Count; i++)
+                {
+                    var tempPath = CreateTempBitmapPath();
+                    try
+                    {
+                        using var bitmap = GetBitmapFromTempFile(images[i], tempPath);
+                        firstBitmap.SaveAdd(bitmap, encoderParams);
+                    }
+                    finally
+                    {
+                        DeleteTempBitmap(tempPath);
+                    }
+                }
 #pragma warning disable S4143 // Reusing encoderParams with different parameter values is intentional
-            encoderParams.Param[0] = new EncoderParameter(Encoder.SaveFlag, (long)EncoderValue.Flush);
+                encoderParams.Param[0] = new EncoderParameter(Encoder.SaveFlag, (long)EncoderValue.Flush);
 #pragma warning restore S4143
-            firstBitmap.SaveAdd(encoderParams);
+                firstBitmap.SaveAdd(encoderParams);
+            }
+            finally
+            {
+                DeleteTempBitmap(firstTempPath);
+            }
         });
     }
 
@@ -524,17 +541,30 @@ public class ScannerService : IScannerQueries, IScannerService, IAsyncDisposable
             ?? throw new InvalidOperationException("TIFF encoder not found");
     }
 
-    private Bitmap GetBitmapFromImage(ProcessedImage image)
+    private static string CreateTempBitmapPath()
     {
-        return GetBitmapViaTempFile(image);
+        return Path.Combine(Path.GetTempPath(), $"scan_{Guid.NewGuid()}.bmp");
     }
 
-    private Bitmap GetBitmapViaTempFile(ProcessedImage image)
+    private Bitmap GetBitmapFromTempFile(ProcessedImage image, string tempPath)
     {
-        var tempPath = Path.Combine(Path.GetTempPath(), $"scan_{Guid.NewGuid()}.bmp");
         image.Save(tempPath, ImageFileFormat.Bmp);
-        _tempBitmapFiles.Add(tempPath);
+        _tempBitmapFiles.TryAdd(tempPath, 0);
         return new Bitmap(tempPath);
+    }
+
+    private void DeleteTempBitmap(string tempPath)
+    {
+        _tempBitmapFiles.TryRemove(tempPath, out _);
+        try
+        {
+            File.Delete(tempPath);
+            _logger.LogDebug("Deleted temp bitmap file: {TempFile}", tempPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete temp bitmap file: {TempFile}", tempPath);
+        }
     }
 
     [ExcludeFromCodeCoverage(Justification = "Resolves a scan target from a live device enumeration; requires real hardware, see QueryDriverDevicesAsync.")]
