@@ -77,8 +77,12 @@ jobs:
               Write-Host "Failed tests: $($failed.Count)"
               foreach ($result in ($failed | Select-Object -First 10)) {
                 $message = [string] $result.Message
-                $message = (($message -replace '\r?\n', ' ') -replace ':', ' -')
-                if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+                if ([string]::IsNullOrWhiteSpace($message)) { $message = [string] $result.StackTrace }
+                if ([string]::IsNullOrWhiteSpace($message)) { $message = '(no message or stack in TRX)' }
+                $message = ($message -replace '\r?\n', ' ')
+                if ($message.Length -gt 1200) { $message = $message.Substring(0, 1200) }
+                Write-Host "FAILED TEST: $($result.testName)"
+                Write-Host "  message: $message"
                 Write-Host "::error::$($result.testName) - $message"
               }
             }
