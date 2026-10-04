@@ -34,7 +34,8 @@ public record UpsertProfileDto(
 /// <summary>
 /// DTO for partial profile updates. Only provided fields are updated.
 /// Null values mean "don't change this field" - they are NOT used to clear fields.
-/// To fully replace a profile, use the POST/PUT endpoint with UpsertProfileDto.
+/// POST creates a new profile from UpsertProfileDto; PATCH updates the provided fields only.
+/// There is no full-replace endpoint, and DeviceId cannot be cleared once set.
 /// </summary>
 public record UpdateProfileDto(
     string? Name = null,

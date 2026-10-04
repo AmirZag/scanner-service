@@ -104,24 +104,17 @@ internal static class ApiListenerFirewall
 
     private static bool RuleExists()
     {
-        using var process = StartNetsh("advfirewall firewall show rule name=\"" + RuleName + "\"", elevate: false);
-        // netsh exits with 1 when the named rule does not exist
-        return WaitForExit(process) && process.ExitCode == 0;
+        return NetshFirewallRule.RuleExists(RuleName);
     }
 
     private static void AddRule(string exePath)
     {
-        using var process = StartNetsh(BuildAddRuleArguments(exePath), elevate: false);
-        if (!WaitForExit(process) || process.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"netsh did not add the Web API firewall rule (exit code {process.ExitCode})");
-        }
+        NetshFirewallRule.AddRule(RuleName, BuildAddRuleArguments(exePath), elevate: false);
     }
 
     private static void DeleteRule()
     {
-        using var process = StartNetsh("advfirewall firewall delete rule name=\"" + RuleName + "\"", elevate: false);
-        WaitForExit(process);
+        NetshFirewallRule.DeleteRule(RuleName);
     }
 
     /// <summary>
@@ -132,11 +125,7 @@ internal static class ApiListenerFirewall
     [ExcludeFromCodeCoverage(Justification = "Shells out with Verb=runas, triggering a UAC consent dialog; untestable in automation.")]
     private static void AddRuleElevated(string exePath)
     {
-        using var process = StartNetsh(BuildAddRuleArguments(exePath), elevate: true);
-        if (!WaitForExit(process) || process.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"elevated netsh did not add the Web API firewall rule (exit code {process.ExitCode})");
-        }
+        NetshFirewallRule.AddRule(RuleName, BuildAddRuleArguments(exePath), elevate: true);
     }
 
     private static string BuildAddRuleArguments(string exePath)
@@ -148,37 +137,5 @@ internal static class ApiListenerFirewall
             + "name=\"" + RuleName + "\" "
             + "dir=in action=allow protocol=TCP profile=any "
             + "program=\"" + exePath + "\"";
-    }
-
-    private static bool WaitForExit(Process process)
-    {
-        if (!process.WaitForExit((int)TimeSpan.FromSeconds(10).TotalMilliseconds))
-        {
-            process.Kill(entireProcessTree: true);
-            return false;
-        }
-
-        return true;
-    }
-
-    private static Process StartNetsh(string arguments, bool elevate)
-    {
-        // Output is deliberately not redirected: only the exit code matters, and an unread full
-        // stdout pipe would make netsh block once its buffer fills.
-        var netshPath = Path.Combine(Environment.SystemDirectory, "netsh.exe");
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = netshPath,
-            Arguments = arguments,
-            UseShellExecute = elevate,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden
-        };
-        if (elevate)
-        {
-            startInfo.Verb = "runas";
-        }
-
-        return Process.Start(startInfo)!;
     }
 }

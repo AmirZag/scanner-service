@@ -9,11 +9,15 @@ using ScannerService.Infrastructure.Persistence;
 
 namespace ScannerService.Infrastructure.Repositories;
 
-public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
+public class ProfileRepository : IProfileRepository
 {
+    private readonly Context Context;
+    private readonly ILogger<ProfileRepository> Logger;
+
     public ProfileRepository(Context context, ILogger<ProfileRepository> logger)
-        : base(context, logger)
     {
+        Context = context;
+        Logger = logger;
     }
 
     public async Task<List<ProfileDto>> GetAllAsync(CancellationToken cancellationToken = default)
@@ -22,7 +26,7 @@ public class ProfileRepository : RepositoryBase<Profile>, IProfileRepository
         return await Context.Profiles.Select(p => MapToProfileDto(p)).ToListAsync(cancellationToken);
     }
 
-    public new async Task<ProfileDto?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
+    public async Task<ProfileDto?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         Logger.LogDebug("Retrieving profile {ProfileId}", id);
         var entity = await Context.Profiles.FindAsync([id], cancellationToken);

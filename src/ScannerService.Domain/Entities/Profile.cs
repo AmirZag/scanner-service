@@ -9,6 +9,8 @@ public class Profile
     public string? DeviceId { get; set; }
     public string PaperSource { get; set; } = Common.ScannerConstants.PaperSource.Glass;
     public string BitDepth { get; set; } = Common.ScannerConstants.BitDepth.Color;
+    // PageSize / HorizontalAlign (and Scale) are validated and persisted but not yet wired into
+    // NAPS2 scan options - UI-only settings for now. Do not remove: stored profiles carry them.
     public string PageSize { get; set; } = Common.ScannerConstants.PageSize.A4;
     public string HorizontalAlign { get; set; } = Common.ScannerConstants.HorizontalAlign.Center;
     public int Resolution { get; set; } = Common.ApplicationConstants.ProfileDefaults.DefaultResolution;

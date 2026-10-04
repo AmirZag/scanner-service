@@ -34,11 +34,6 @@ public class ScannerConstantsTests
         Assert.Equal("1:2", ScannerConstants.Scale.HalfSize);
         Assert.Equal("1:4", ScannerConstants.Scale.QuarterSize);
         Assert.Equal("1:8", ScannerConstants.Scale.EighthSize);
-
-        Assert.Equal("Twain", ScannerConstants.Driver.Twain);
-        Assert.Equal("Wia", ScannerConstants.Driver.Wia);
-        Assert.Equal("Escl", ScannerConstants.Driver.Escl);
-        Assert.Equal("Sane", ScannerConstants.Driver.Sane);
     }
 
     [Fact]
@@ -63,7 +58,6 @@ public class ScannerConstantsTests
 
         Assert.Equal(100, ApplicationConstants.RateLimit.DefaultMaxRequests);
         Assert.Equal(1, ApplicationConstants.RateLimit.DefaultWindowMinutes);
-        Assert.Equal(1000, ApplicationConstants.RateLimit.CleanupThreshold);
 
         Assert.Equal(3, ApplicationConstants.RecentScans.MaxDepth);
         Assert.Equal(1000, ApplicationConstants.RecentScans.MaxFiles);

@@ -131,19 +131,13 @@ begin
     Result := Copy(FileName, 1, LastDot - 1);
 end;
 
-// Helper function to check if the app is running
-// Uses FindWindow to detect if the tray app window exists
+// Helper function to check if the app is running.
+// The app holds the Global\ResaaScannerService mutex for its whole lifetime (audit A-8), so a
+// mutex check is exact: the previous FindWindow approach matched a generic WinForms window
+// class present in any same-runtime Windows Forms app, giving false "still running" prompts.
 function IsAppRunning(): Boolean;
 begin
-  Result := False;
-  // Try to find the window by class name (Windows Forms)
-  // The class name might vary, so we try multiple approaches
-  if FindWindowByClassName('WindowsForms10.Window.8.app.0.33c0d9d_r6_ad1') > 0 then
-    Result := True
-  else if FindWindowByWindowName('Resaa Scanner Service') > 0 then
-    Result := True
-  else if FindWindowByClassName('ScannerService.TrayApp') > 0 then
-    Result := True;
+  Result := CheckForMutexes('Global\ResaaScannerService');
 end;
 
 // Kill the app if running
@@ -153,6 +147,11 @@ var
 begin
   Result := Exec('taskkill.exe', '/F /IM ' + AppName + '.exe', '', SW_HIDE,
                  ewWaitUntilTerminated, ResultCode);
+  // taskkill exits 0 when it terminated the process and 128 when none was running; anything
+  // else means the kill failed (e.g. access denied) and callers must not treat the app as
+  // closed. CheckForMutexes re-verifies: a terminated app releases its single-instance mutex.
+  if Result and (ResultCode <> 0) and (ResultCode <> 128) then
+    Result := not CheckForMutexes('Global\ResaaScannerService');
 end;
 
 // Check if the app is already installed
@@ -343,6 +342,12 @@ begin
       begin
         // Remove entire app directory including user data
         DelTree(ExpandConstant('{app}'), True, True, True);
+        // The default export path is Documents\Scans - outside {app}, so the app-directory
+        // delete above does not cover it. The prompt promised scan removal and the user
+        // consented, so delete the default folder outright. A user who redirected scans to a
+        // custom path keeps those files either way.
+        if DirExists(ExpandConstant('{userdocs}\Scans')) then
+          DelTree(ExpandConstant('{userdocs}\Scans'), True, True, True);
       end
       else
       begin

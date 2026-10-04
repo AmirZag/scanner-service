@@ -187,7 +187,6 @@ public class DtoTests
         ApiHealthCheckDto health = new ApiHealthCheckDto(true, "1.2.3.4");
         ExportSettingDto exportSetting = new ExportSettingDto("PDF", @"C:\Scans", "scan_{datetime}");
         SettingsUpdateResponseDto updateResponse = new SettingsUpdateResponseDto(true, "restart in progress");
-        DependencyHealthDto dependency = new DependencyHealthDto("database", true);
 
         Assert.Equal("wia-hp", scanner.Id);
         Assert.Equal("HP LaserJet", scanner.Name);
@@ -199,7 +198,5 @@ public class DtoTests
         Assert.Equal("scan_{datetime}", exportSetting.FileName);
         Assert.True(updateResponse.Restarting);
         Assert.Equal("restart in progress", updateResponse.Warning);
-        Assert.Equal("database", dependency.Name);
-        Assert.True(dependency.IsHealthy);
     }
 }

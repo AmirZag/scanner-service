@@ -1,11 +1,6 @@
 namespace ScannerService.Application.DTOs;
 
 /// <summary>
-/// Represents the health status of a system dependency.
-/// </summary>
-public record DependencyHealthDto(string Name, bool IsHealthy);
-
-/// <summary>
 /// Extended health check response with dependency status.
 /// </summary>
 public record DetailedApiHealthCheckDto(

@@ -57,15 +57,7 @@ public static class ScannerConstants
         public const string EighthSize = "1:8";
     }
 
-    /// <summary>Scanner driver names</summary>
-    public static class Driver
-    {
-        public const string Twain = "Twain";
-        public const string Wia = "Wia";
-        public const string Escl = "Escl";
-        public const string Sane = "Sane";
-    }
-
+    
     /// <summary>Default timeouts for scanner operations (see <see cref="ScannerTimeouts"/>).</summary>
     public static class Timeouts
     {

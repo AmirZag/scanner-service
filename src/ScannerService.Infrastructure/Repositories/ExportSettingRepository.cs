@@ -9,13 +9,17 @@ using ScannerService.Infrastructure.Persistence;
 
 namespace ScannerService.Infrastructure.Repositories;
 
-public class ExportSettingRepository : RepositoryBase<ExportSetting>, IExportSettingRepository
+public class ExportSettingRepository : IExportSettingRepository
 {
+    private readonly Context Context;
+    private readonly ILogger<ExportSettingRepository> Logger;
+
     public ExportSettingRepository(
         Context context,
         ILogger<ExportSettingRepository> logger)
-        : base(context, logger)
     {
+        Context = context;
+        Logger = logger;
     }
 
     public async Task<Result<ExportSettingDto>> GetExportSettingAsync(CancellationToken cancellationToken = default)

@@ -16,6 +16,9 @@
 		<!-- NAPS2.Sdk 1.3.0's net10.0 assemblies carry an assembly-level RequiresPreviewFeatures mark;
 		     consuming them on .NET 10 raises CA2252 unless the consuming assemblies opt in. -->
 		<EnablePreviewFeatures>true</EnablePreviewFeatures>
+		<!-- CA1873 (avoid Debug.Assert with expensive arguments): the Debug request/duration
+		     logging intentionally computes its arguments unconditionally; the cost is accepted
+		     on this low-traffic localhost API. -->
 		<NoWarn>$(NoWarn);CA1873</NoWarn>
 	</PropertyGroup>
 
@@ -24,8 +27,11 @@
 	<Target Name="SetVersionFromGitCommitCount" BeforeTargets="PrepareForBuild">
 		<Exec Command="git rev-list --count HEAD" IgnoreExitCode="true" ConsoleToMSBuild="true">
 			<Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount"/>
+			<Output TaskParameter="ExitCode" PropertyName="GitCommitCountExitCode"/>
 		</Exec>
-		<PropertyGroup Condition="'$(GitCommitCount)' != ''">
+		<!-- Gate on the exit code: ConsoleOutput also captures git's stderr, so gating on the
+		     captured text alone would turn a git error message into the version string. -->
+		<PropertyGroup Condition="'$(GitCommitCount)' != '' And '$(GitCommitCountExitCode)' == '0'">
 			<FileVersion>$(VersionPrefix).$(GitCommitCount)</FileVersion>
 			<!-- The health endpoints and the OpenAPI doc read GetName().Version, which reads
 			     AssemblyVersion - it must carry the revision too (assemblies are not strong-named,

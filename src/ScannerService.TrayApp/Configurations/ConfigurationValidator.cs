@@ -252,13 +252,4 @@ public static class ConfigurationValidator
 
         return (errors.Count == 0, errors);
     }
-
-    public static void ThrowIfInvalid(this (bool IsValid, List<string> Errors) validationResult, string configName)
-    {
-        if (!validationResult.IsValid)
-        {
-            var message = $"{configName} validation failed:{Environment.NewLine}{string.Join(Environment.NewLine, validationResult.Errors)}";
-            throw new InvalidOperationException(message);
-        }
-    }
 }

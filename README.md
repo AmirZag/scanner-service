@@ -57,23 +57,23 @@ ScannerService/
 
 ### Backend
 - **.NET 10** - Latest .NET LTS platform
-- **C# 12** - Language features (nullable reference types, implicit usings)
+- **C# 14** - Language features (nullable reference types, implicit usings)
 - **ASP.NET Core** - Web API framework
-- **Entity Framework Core 8** - ORM for database access
+- **Entity Framework Core 10.0.12** - ORM for database access
 - **SQLite** - Embedded database
 
 ### Scanner Integration
-- **NAPS2.Sdk 1.2.1** - Cross-platform scanning SDK
+- **NAPS2.Sdk 1.4.0** - Cross-platform scanning SDK
 - **NAPS2.Images.Gdi** - Windows image processing
 - **NAPS2.Sdk.Worker.Win32** - TWAIN worker process for Windows
 
 ### API Documentation
-- **NSwag.AspNetCore 14.6.3** - OpenAPI specification generation
-- **Scalar.AspNetCore 1.2.52** - Modern API documentation UI
+- **NSwag.AspNetCore 14.7.1** - OpenAPI specification generation
+- **Scalar.AspNetCore 2.17.13** - Modern API documentation UI
 
 ### Validation & Logging
 - **FluentValidation 12.1.1** - Input validation
-- **Serilog 8.0.3** - Structured logging with file sink
+- **Serilog.AspNetCore 10.0.0** - Structured logging with file sink
 
 ### Code Quality
 - **SonarAnalyzer.CSharp** - Static analysis
@@ -263,6 +263,7 @@ The service provides a RESTful API with the following endpoints:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/health` | API health check |
+| GET | `/api/health/detailed` | Dependency health (200 healthy / 503 unhealthy) |
 
 ### Scanners
 | Method | Endpoint | Description |
@@ -275,13 +276,15 @@ The service provides a RESTful API with the following endpoints:
 | GET | `/api/profiles` | Get all scan profiles |
 | GET | `/api/profiles/{id}` | Get profile by ID |
 | POST | `/api/profiles` | Create new profile |
-| PUT | `/api/profiles/{id}` | Update existing profile |
+| PATCH | `/api/profiles/{id}` | Update provided fields only |
 | DELETE | `/api/profiles/{id}` | Delete profile |
 
 ### Scan Operations
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| GET | `/api/scanners/refresh` | Clear the device cache (next listing re-enumerates) |
 | POST | `/api/scan` | Execute a scan job |
+| GET | `/api/recent-scans/{count}` | Most recent scan groups (count 1-100) |
 
 ### Export Settings
 | Method | Endpoint | Description |
@@ -422,13 +425,7 @@ Configuration is managed through `appsettings.json`:
     "HttpTimeout": 2000,            // HTTP timeout (ms)
     "StartupDelay": 2000            // Startup delay (ms)
   },
-  "DatabasePath": "scanner.db",     // SQLite database filename
   "Logging": {
-    "LogLevel": {
-      "Default": "Information",
-      "Microsoft.AspNetCore": "Warning",
-      "Microsoft.EntityFrameworkCore": "Warning"
-    },
     "File": {
       "Path": "logs/scanner-.log",              // Log file path pattern
       "RollingInterval": "Day",                 // Roll interval: Minute/Hour/Day/Month/Year

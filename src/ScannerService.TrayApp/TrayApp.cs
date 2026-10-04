@@ -23,6 +23,9 @@ namespace ScannerService.TrayApp;
 
 public class TrayApp : ApplicationContext
 {
+    // Classic DllImport rather than LibraryImport: DestroyIcon's bool return needs explicit
+    // marshalling plus AllowUnsafeBlocks for the generated code - more ceremony than a
+    // once-per-shutdown icon cleanup justifies (Phase 1 audit F-22, applied then reverted).
     [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
     [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     private static extern bool DestroyIcon(IntPtr hIcon);

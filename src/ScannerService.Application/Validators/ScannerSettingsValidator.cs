@@ -9,8 +9,9 @@ namespace ScannerService.Application.Validators;
 /// Structural validation of the flat settings PUT body. Only shape rules live here (null
 /// entries, empty/malformed device addresses, list size, string lengths); all numeric
 /// range/cross-field validation is the existing ConfigurationValidator's job, run against
-/// the full configuration — the single source of truth for ranges. A missing numeric field
-/// deserializes as 0 and is rejected there with the exact allowed range in its message.
+/// the full configuration — the single source of truth for ranges. PUT is a full replacement:
+/// an omitted numeric field silently takes the DTO's default (which is in range); only
+/// present-but-out-of-range values are rejected, with the exact allowed range in their message.
 /// </summary>
 public class ScannerSettingsValidator : AbstractValidator<ScannerSettingsDto>
 {

@@ -251,7 +251,6 @@ public class WebApiHostService : IDisposable
 
             builder.Services.AddValidatorsFromAssemblyContaining<UpsertProfileValidator>();
 
-            builder.Services.AddHttpClient();
 
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddOpenApiDocument(config =>

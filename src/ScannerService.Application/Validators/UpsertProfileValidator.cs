@@ -23,23 +23,23 @@ public class UpsertProfileValidator : AbstractValidator<UpsertProfileDto>
             .When(x => x.DeviceId != null);
 
         RuleFor(x => x.PaperSource)
-            .Must(AllowedPaperSource.Contains)
+            .Must(ProfileAllowedValues.PaperSource.Contains)
             .WithMessage("PaperSource must be either 'Glass' or 'Feeder'");
 
         RuleFor(x => x.BitDepth)
-            .Must(AllowedBitDepth.Contains)
+            .Must(ProfileAllowedValues.BitDepth.Contains)
             .WithMessage("BitDepth must be 'Color', 'Grayscale', or 'BlackAndWhite'");
 
         RuleFor(x => x.PageSize)
-            .Must(AllowedPageSize.Contains)
+            .Must(ProfileAllowedValues.PageSize.Contains)
             .WithMessage("PageSize must be one of: A4, A5, Letter, Legal");
 
         RuleFor(x => x.HorizontalAlign)
-            .Must(AllowedHorizontalAlign.Contains)
+            .Must(ProfileAllowedValues.HorizontalAlign.Contains)
             .WithMessage("HorizontalAlign must be 'Left', 'Center', or 'Right'");
 
         RuleFor(x => x.Scale)
-            .Must(AllowedScale.Contains)
+            .Must(ProfileAllowedValues.Scale.Contains)
             .WithMessage("Scale must be one of: 1:1, 1:2, 1:4, 1:8");
 
         RuleFor(x => x.Resolution)
@@ -58,15 +58,5 @@ public class UpsertProfileValidator : AbstractValidator<UpsertProfileDto>
             .InclusiveBetween(1, 100)
             .WithMessage("ImageQuality must be between 1 and 100");
     }
-
-    private static readonly HashSet<string> AllowedPaperSource = new(StringComparer.OrdinalIgnoreCase) { "Glass", "Feeder" };
-
-    private static readonly HashSet<string> AllowedBitDepth = new(StringComparer.OrdinalIgnoreCase) { "Color", "Grayscale", "BlackAndWhite" };
-
-    private static readonly HashSet<string> AllowedPageSize = new(StringComparer.OrdinalIgnoreCase) { "A4", "A5", "Letter", "Legal" };
-
-    private static readonly HashSet<string> AllowedHorizontalAlign = new(StringComparer.OrdinalIgnoreCase) { "Left", "Center", "Right" };
-
-    private static readonly HashSet<string> AllowedScale = new(StringComparer.OrdinalIgnoreCase) { "1:1", "1:2", "1:4", "1:8" };
 
 }

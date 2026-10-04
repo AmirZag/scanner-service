@@ -20,27 +20,27 @@ public class UpdateProfileValidator : AbstractValidator<UpdateProfileDto>
 
         // If provided, validate against allowed values
         RuleFor(x => x.PaperSource)
-            .Must(value => value != null && AllowedPaperSource.Contains(value))
+            .Must(value => value != null && ProfileAllowedValues.PaperSource.Contains(value))
             .WithMessage("PaperSource must be either 'Glass' or 'Feeder'")
             .When(x => x.PaperSource != null);
 
         RuleFor(x => x.BitDepth)
-            .Must(value => value != null && AllowedBitDepth.Contains(value))
+            .Must(value => value != null && ProfileAllowedValues.BitDepth.Contains(value))
             .WithMessage("BitDepth must be 'Color', 'Grayscale', or 'BlackAndWhite'")
             .When(x => x.BitDepth != null);
 
         RuleFor(x => x.PageSize)
-            .Must(value => value != null && AllowedPageSize.Contains(value))
+            .Must(value => value != null && ProfileAllowedValues.PageSize.Contains(value))
             .WithMessage("PageSize must be one of: A4, A5, Letter, Legal")
             .When(x => x.PageSize != null);
 
         RuleFor(x => x.HorizontalAlign)
-            .Must(value => value != null && AllowedHorizontalAlign.Contains(value))
+            .Must(value => value != null && ProfileAllowedValues.HorizontalAlign.Contains(value))
             .WithMessage("HorizontalAlign must be 'Left', 'Center', or 'Right'")
             .When(x => x.HorizontalAlign != null);
 
         RuleFor(x => x.Scale)
-            .Must(value => value != null && AllowedScale.Contains(value))
+            .Must(value => value != null && ProfileAllowedValues.Scale.Contains(value))
             .WithMessage("Scale must be one of: 1:1, 1:2, 1:4, 1:8")
             .When(x => x.Scale != null);
 
@@ -65,9 +65,4 @@ public class UpdateProfileValidator : AbstractValidator<UpdateProfileDto>
             .When(x => x.ImageQuality != null);
     }
 
-    private static readonly HashSet<string> AllowedPaperSource = new(StringComparer.OrdinalIgnoreCase) { "Glass", "Feeder" };
-    private static readonly HashSet<string> AllowedBitDepth = new(StringComparer.OrdinalIgnoreCase) { "Color", "Grayscale", "BlackAndWhite" };
-    private static readonly HashSet<string> AllowedPageSize = new(StringComparer.OrdinalIgnoreCase) { "A4", "A5", "Letter", "Legal" };
-    private static readonly HashSet<string> AllowedHorizontalAlign = new(StringComparer.OrdinalIgnoreCase) { "Left", "Center", "Right" };
-    private static readonly HashSet<string> AllowedScale = new(StringComparer.OrdinalIgnoreCase) { "1:1", "1:2", "1:4", "1:8" };
 }

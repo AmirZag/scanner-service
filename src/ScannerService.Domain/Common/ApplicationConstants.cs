@@ -18,7 +18,6 @@ public static class ApplicationConstants
     {
         public const int DefaultMaxRequests = 100;
         public const int DefaultWindowMinutes = 1;
-        public const int CleanupThreshold = 1000;
     }
 
     /// <summary>Recent scanning limits</summary>

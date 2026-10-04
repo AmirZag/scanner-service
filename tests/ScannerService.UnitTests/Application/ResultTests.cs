@@ -96,11 +96,8 @@ public class ResultTests
         Result<int> success = Result<int>.Success(7);
         Result<int> failure = Result<int>.Failure("device offline");
 
-        bool successAsBool = success;
-        bool failureAsBool = failure;
-
-        Assert.True(successAsBool);
-        Assert.False(failureAsBool);
+        Assert.True(success.IsSuccess);
+        Assert.False(failure.IsSuccess);
     }
 
     private sealed record TestableResult : Result

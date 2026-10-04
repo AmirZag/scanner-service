@@ -71,7 +71,7 @@ public class FirewallHelpersTests
             {
                 Exception failure = InvokePrivateStaticExpectingFailure(typeof(ApiListenerFirewall), "AddRule", missingExePath);
                 Assert.IsType<InvalidOperationException>(failure);
-                Assert.Contains("did not add the Web API firewall rule", failure.Message, StringComparison.Ordinal);
+                Assert.Contains("netsh did not add the", failure.Message, StringComparison.Ordinal);
             }
         }
         finally
@@ -121,7 +121,7 @@ public class FirewallHelpersTests
             {
                 Exception failure = InvokePrivateStaticExpectingFailure(typeof(NetworkDiscoveryFirewall), "AddRule", missingExePath);
                 Assert.IsType<InvalidOperationException>(failure);
-                Assert.Contains("did not add the mDNS firewall rule", failure.Message, StringComparison.Ordinal);
+                Assert.Contains("netsh did not add the", failure.Message, StringComparison.Ordinal);
             }
         }
         finally
